@@ -40,6 +40,13 @@ service cloud.firestore {
       allow write: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
     }
 
+    // Custom Watchlist Rules
+    match /custom_watchlists/{watchlistId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
     // Follows Rules
     match /follows/{followId} {
       allow read: if true;
@@ -61,6 +68,42 @@ service cloud.firestore {
     // Reports Rules
     match /reports/{reportId} {
       allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // Community Posts Rules
+    match /community_posts/{postId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Collections Rules
+    match /collections/{collectionId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Fanzone Threads Rules
+    match /fanzone_threads/{threadId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Fanzone Theories Rules
+    match /fanzone_theories/{theoryId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Fanzone Polls Rules
+    match /fanzone_polls/{pollId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Fanzone Quotes Rules
+    match /fanzone_quotes/{quoteId} {
+      allow read: if true;
       allow write: if isAuthenticated();
     }
   }

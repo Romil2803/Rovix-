@@ -25,9 +25,13 @@ import {
   reportReview,
   toggleWatchlist,
   getWatchlist,
-  updateWatchlistStatus
+  updateWatchlistStatus,
+  addReviewReaction,
+  getCustomWatchlists,
+  addMovieToCustomWatchlist,
+  removeMovieFromCustomWatchlist
 } from '../db/storage';
-import { Movie, Review, WatchlistStatus } from '../types';
+import { Movie, Review, WatchlistStatus, CustomWatchlist } from '../types';
 import RovixMeter from './RovixMeter';
 import { getMovieDetails, getNetflixIdFromTmdbOrImdb } from '../lib/tmdb';
 
@@ -74,6 +78,10 @@ export default function MovieDetails({
   // Status Alerts / Toasts
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Custom watchlists state
+  const [customWatchlists, setCustomWatchlists] = useState<CustomWatchlist[]>([]);
+  const [showAddCustomWlDropdown, setShowAddCustomWlDropdown] = useState(false);
+
   // Load film details and states dynamically from TMDB
   const loadFilmDetails = async () => {
     setLoading(true);
@@ -87,6 +95,9 @@ export default function MovieDetails({
         const watchlist = getWatchlist(userId);
         const wlFound = watchlist.find(w => w.movieId === movieId);
         setWatchlistStatus(wlFound ? wlFound.status : 'not_added');
+
+        // Load custom watchlists
+        setCustomWatchlists(getCustomWatchlists(userId));
 
         // Load reviews
         setReviews(getReviews(movieId));
@@ -181,12 +192,24 @@ export default function MovieDetails({
     triggerToast(`Removed from Watchlist`);
   };
 
+  const handleAddToCustomWatchlist = async (wlId: string) => {
+    await addMovieToCustomWatchlist(wlId, movie.id);
+    triggerToast(`Added to custom list!`);
+    setCustomWatchlists(getCustomWatchlists(userId));
+  };
+
+  const handleRemoveFromCustomWatchlist = async (wlId: string) => {
+    await removeMovieFromCustomWatchlist(wlId, movie.id);
+    triggerToast(`Removed from custom list!`);
+    setCustomWatchlists(getCustomWatchlists(userId));
+  };
+
   // Write Review
-  const handleSubmitReview = (e: React.FormEvent) => {
+  const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reviewTitle || !reviewBody) return;
 
-    addReview(
+    await addReview(
       userId, 
       movie.id, 
       reviewTitle, 
@@ -208,14 +231,14 @@ export default function MovieDetails({
   };
 
   // Review interactions
-  const handleLikeReview = (reviewId: string) => {
-    toggleLikeReview(reviewId, userId);
+  const handleLikeReview = async (reviewId: string) => {
+    await toggleLikeReview(reviewId, userId);
     loadFilmDetails();
   };
 
-  const handlePublishReply = (reviewId: string) => {
+  const handlePublishReply = async (reviewId: string) => {
     if (!replyText.trim()) return;
-    addReply(reviewId, userId, replyText);
+    await addReply(reviewId, userId, replyText);
     setReplyText('');
     setActiveReplyBox(null);
     triggerToast('Reply posted.');
@@ -596,42 +619,113 @@ export default function MovieDetails({
                       </div>
 
                       {/* Interactions Row */}
-                      <div className="flex items-center space-x-4 border-t border-white/5 pt-3 text-xs text-gray-400">
-                        <button
-                          onClick={() => handleLikeReview(rev.id)}
-                          className={`flex items-center space-x-1.5 hover:text-white transition cursor-pointer ${
-                            hasLiked ? 'text-[#FFD700] font-semibold' : ''
-                          }`}
-                        >
-                          <ThumbsUp className="w-3.5 h-3.5" />
-                          <span>{rev.likes}</span>
-                        </button>
+                      <div className="flex flex-col space-y-3.5 border-t border-white/5 pt-3">
+                        {/* Reaction Badges Row */}
+                        <div className="flex flex-wrap gap-2 text-[10px] font-mono">
+                          <button
+                            onClick={() => addReviewReaction(rev.id, 'helpful', userId)}
+                            className={`px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center space-x-1 ${
+                              rev.reactions?.helpful?.includes(userId)
+                                ? 'bg-[#FFD700]/10 border-[#FFD700]/30 text-[#FFD700] font-bold'
+                                : 'bg-zinc-950 border-white/5 text-gray-400 hover:border-white/10'
+                            }`}
+                            title="Helpful Review"
+                          >
+                            <span>👍 Helpful</span>
+                            <span className="opacity-60">({rev.reactions?.helpful?.length || 0})</span>
+                          </button>
 
-                        <button
-                          onClick={() => {
-                            setActiveReplyBox(isReplyBoxOpen ? null : rev.id);
-                            setActiveReportBox(null);
-                          }}
-                          className={`flex items-center space-x-1.5 hover:text-white transition ${
-                            isReplyBoxOpen ? 'text-white' : ''
-                          }`}
-                        >
-                          <MessageCircle className="w-3.5 h-3.5" />
-                          <span>{rev.replies.length} Replies</span>
-                        </button>
+                          <button
+                            onClick={() => addReviewReaction(rev.id, 'lovedIt', userId)}
+                            className={`px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center space-x-1 ${
+                              rev.reactions?.lovedIt?.includes(userId)
+                                ? 'bg-red-500/10 border-red-500/30 text-red-400 font-bold'
+                                : 'bg-zinc-950 border-white/5 text-gray-400 hover:border-white/10'
+                            }`}
+                            title="Loved It"
+                          >
+                            <span>❤️ Loved It</span>
+                            <span className="opacity-60">({rev.reactions?.lovedIt?.length || 0})</span>
+                          </button>
 
-                        <button
-                          onClick={() => {
-                            setActiveReportBox(isReportBoxOpen ? null : rev.id);
-                            setActiveReplyBox(null);
-                          }}
-                          className={`flex items-center space-x-1.5 hover:text-red-400 transition ml-auto ${
-                            isReportBoxOpen ? 'text-red-400' : ''
-                          }`}
-                        >
-                          <AlertTriangle className="w-3.5 h-3.5" />
-                          <span>Report</span>
-                        </button>
+                          <button
+                            onClick={() => addReviewReaction(rev.id, 'greatAnalysis', userId)}
+                            className={`px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center space-x-1 ${
+                              rev.reactions?.greatAnalysis?.includes(userId)
+                                ? 'bg-purple-500/10 border-purple-500/30 text-purple-400 font-bold'
+                                : 'bg-zinc-950 border-white/5 text-gray-400 hover:border-white/10'
+                            }`}
+                            title="Great Analysis"
+                          >
+                            <span>🧠 Great Analysis</span>
+                            <span className="opacity-60">({rev.reactions?.greatAnalysis?.length || 0})</span>
+                          </button>
+
+                          <button
+                            onClick={() => addReviewReaction(rev.id, 'funny', userId)}
+                            className={`px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center space-x-1 ${
+                              rev.reactions?.funny?.includes(userId)
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-bold'
+                                : 'bg-zinc-950 border-white/5 text-gray-400 hover:border-white/10'
+                            }`}
+                            title="Funny"
+                          >
+                            <span>😂 Funny</span>
+                            <span className="opacity-60">({rev.reactions?.funny?.length || 0})</span>
+                          </button>
+
+                          <button
+                            onClick={() => addReviewReaction(rev.id, 'mindBlown', userId)}
+                            className={`px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center space-x-1 ${
+                              rev.reactions?.mindBlown?.includes(userId)
+                                ? 'bg-blue-500/10 border-blue-500/30 text-blue-400 font-bold'
+                                : 'bg-zinc-950 border-white/5 text-gray-400 hover:border-white/10'
+                            }`}
+                            title="Mind Blown"
+                          >
+                            <span>🤯 Mind Blown</span>
+                            <span className="opacity-60">({rev.reactions?.mindBlown?.length || 0})</span>
+                          </button>
+                        </div>
+
+                        {/* Standard Actions Row */}
+                        <div className="flex items-center space-x-4 text-xs text-gray-400 font-medium">
+                          <button
+                            onClick={() => handleLikeReview(rev.id)}
+                            className={`flex items-center space-x-1.5 hover:text-white transition cursor-pointer ${
+                              hasLiked ? 'text-[#FFD700] font-semibold' : ''
+                            }`}
+                          >
+                            <ThumbsUp className="w-3.5 h-3.5" />
+                            <span>{rev.likes} Likes</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setActiveReplyBox(isReplyBoxOpen ? null : rev.id);
+                              setActiveReportBox(null);
+                            }}
+                            className={`flex items-center space-x-1.5 hover:text-white transition ${
+                              isReplyBoxOpen ? 'text-white' : ''
+                            }`}
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>{rev.replies.length} Replies</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setActiveReportBox(isReportBoxOpen ? null : rev.id);
+                              setActiveReplyBox(null);
+                            }}
+                            className={`flex items-center space-x-1.5 hover:text-red-400 transition ml-auto ${
+                              isReportBoxOpen ? 'text-red-400' : ''
+                            }`}
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            <span>Report</span>
+                          </button>
+                        </div>
                       </div>
 
                       {/* Actions Boxes */}
@@ -778,6 +872,74 @@ export default function MovieDetails({
                   </button>
                 </div>
               )}
+
+              {/* Custom Watchlists Section */}
+              <div className="bg-zinc-950 p-3.5 rounded-xl border border-white/5 space-y-2 text-xs">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-400 font-mono font-semibold text-[10px] uppercase">Custom Lists:</span>
+                  <button
+                    onClick={() => setShowAddCustomWlDropdown(!showAddCustomWlDropdown)}
+                    className="text-[#FFD700] hover:underline font-bold text-[10px] uppercase font-mono cursor-pointer"
+                  >
+                    {showAddCustomWlDropdown ? 'Close' : 'Add / Manage'}
+                  </button>
+                </div>
+
+                {customWatchlists.length === 0 ? (
+                  <p className="text-zinc-500 italic text-[10px]">No custom lists yet. Create one in the Watchlist tab!</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                    {customWatchlists.map(wl => {
+                      const containsMovie = wl.movieIds.includes(movie.id);
+                      return (
+                        <div key={wl.id} className="flex items-center justify-between bg-zinc-900/60 p-2 rounded-lg border border-white/5">
+                          <div className="min-w-0 flex-1 mr-2">
+                            <p className="font-bold text-white truncate text-[11px]">{wl.name}</p>
+                            <span className={`text-[8px] px-1 py-0.2 rounded font-mono font-bold uppercase ${wl.isPrivate ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-green-500/10 text-green-400 border border-green-500/20'}`}>
+                              {wl.isPrivate ? 'Private' : 'Public'}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => containsMovie ? handleRemoveFromCustomWatchlist(wl.id) : handleAddToCustomWatchlist(wl.id)}
+                            className={`px-2.5 py-1 rounded text-[9px] font-bold uppercase transition-all duration-300 cursor-pointer ${
+                              containsMovie
+                                ? 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20'
+                                : 'bg-[#FFD700] hover:bg-[#FFD700]/90 text-black'
+                            }`}
+                          >
+                            {containsMovie ? 'Remove' : 'Add'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                
+                {showAddCustomWlDropdown && (
+                  <div className="border-t border-white/5 pt-2.5 mt-2 space-y-2">
+                    <p className="text-[9px] text-zinc-400 font-bold uppercase">Quick Create Custom Watchlist</p>
+                    <input
+                      type="text"
+                      placeholder="Watchlist Name..."
+                      id="quick-wl-name"
+                      className="w-full bg-zinc-900 border border-white/5 rounded-lg p-2 text-white text-[11px] outline-none focus:border-[#FFD700]"
+                      onKeyDown={async (e) => {
+                        if (e.key === 'Enter') {
+                          const target = e.target as HTMLInputElement;
+                          const name = target.value.trim();
+                          if (!name) return;
+                          const { createCustomWatchlist } = await import('../db/storage');
+                          await createCustomWatchlist(userId, name, '', false);
+                          target.value = '';
+                          setCustomWatchlists(getCustomWatchlists(userId));
+                          triggerToast(`Watchlist "${name}" created!`);
+                        }
+                      }}
+                    />
+                    <p className="text-[8px] text-zinc-500">Press Enter to create (defaults to Public). You can edit details in the Watchlist tab.</p>
+                  </div>
+                )}
+              </div>
 
               {/* Quick Rate Slider (0.5 to 5.0) */}
               <div className="bg-zinc-950 p-4 rounded-xl border border-white/5 space-y-2.5">

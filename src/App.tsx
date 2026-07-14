@@ -46,12 +46,20 @@ import {
   isFollowing,
   addNotification,
   subscribeToDatabaseChanges,
-  getUsersList
+  getUsersList,
+  getFollowsList,
+  getCustomWatchlists,
+  createCustomWatchlist,
+  updateCustomWatchlist,
+  deleteCustomWatchlist,
+  removeMovieFromCustomWatchlist
 } from './db/storage';
-import { Movie, Review, User as UserType, Notification, Announcement, WatchlistStatus } from './types';
-import { onAuthStateChanged } from 'firebase/auth';
+import PersonalizedHomeFeed from './components/PersonalizedHomeFeed';
+import { Movie, Review, User as UserType, Notification, Announcement, WatchlistStatus, CustomWatchlist } from './types';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth } from './lib/firebase';
-import { getTrendingMovies, getTrendingTVShows, searchTMDB, getPopularMovies, getPopularTVShows, getWatchProviders, getLocalizedDiscover, discoverMedia, GENRE_MAP, getTopRated } from './lib/tmdb';
+import { getTrendingMovies, getTrendingTVShows, searchTMDB, getPopularMovies, getPopularTVShows, getWatchProviders, getLocalizedDiscover, discoverMedia, GENRE_MAP, getTopRated, getWatchProvidersForRegion, getMovieDetails } from './lib/tmdb';
+import { useIPGeolocation } from './lib/useIPGeolocation';
 
 // Import Modular tabs/panels
 import BottomNavigation from './components/BottomNavigation';
@@ -113,6 +121,7 @@ function getFlagEmoji(countryCode: string): string {
 export default function App() {
   const [currentUser, setLocalCurrentUser] = useState<UserType | null>(null);
   const [activeTab, setActiveTab] = useState<string>('home');
+  const [homeSubTab, setHomeSubTab] = useState<'featured' | 'personalized'>('featured');
 
   // Master Lists
   const [allMovies, setAllMovies] = useState<Movie[]>([]);
@@ -134,61 +143,43 @@ export default function App() {
   const [searchPlatform, setSearchPlatform] = useState('');
   const [searchCountry, setSearchCountry] = useState('US');
   const [dynamicCountries, setDynamicCountries] = useState(COUNTRIES);
+  const [availableProviders, setAvailableProviders] = useState<string[]>([
+    'Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Max', 'Hulu', 'Crunchyroll', 'Peacock', 'Paramount+', 'JioCinema', 'Hotstar', 'Zee5', 'SonyLIV', 'YouTube', 'Google Play Movies'
+  ]);
 
-  // Auto-detect user's country/region via IP Geolocation
+  // Fetch watch providers for searchCountry
   useEffect(() => {
-    const detectCountry = async () => {
+    const fetchProvidersForCountry = async () => {
+      if (!searchCountry) return;
       try {
-        const response = await fetch('https://ipapi.co/json/');
-        if (response.ok) {
-          const data = await response.json();
-          const detectedCode = data.country_code;
-          const detectedName = data.country_name;
-          if (detectedCode && typeof detectedCode === 'string') {
-            const upperCode = detectedCode.toUpperCase();
-            setSearchCountry(upperCode);
-            setHomeCountry(upperCode);
-            localStorage.setItem('rovix_home_country', upperCode);
-            
-            // Add dynamically if not in original COUNTRIES
-            setDynamicCountries(prev => {
-              if (prev.some(c => c.code === upperCode)) return prev;
-              const flag = getFlagEmoji(upperCode);
-              return [...prev, { code: upperCode, name: detectedName || upperCode, flag }];
-            });
-          }
+        const providers = await getWatchProvidersForRegion(searchCountry);
+        if (providers && providers.length > 0) {
+          setAvailableProviders(providers);
         }
-      } catch (e) {
-        // Fallback using browser metadata (timezone and navigator locale)
-        try {
-          const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          let guessedCode = 'US';
-          if (timezone.includes('Calcutta') || timezone.includes('Asia/Kolkata') || timezone.includes('Delhi') || timezone.includes('Mumbai')) {
-            guessedCode = 'IN';
-          } else if (timezone.includes('London') || timezone.includes('Europe/London')) {
-            guessedCode = 'GB';
-          } else if (timezone.includes('Sydney') || timezone.includes('Melbourne') || timezone.includes('Australia')) {
-            guessedCode = 'AU';
-          } else if (timezone.includes('Toronto') || timezone.includes('Vancouver') || timezone.includes('Canada')) {
-            guessedCode = 'CA';
-          } else {
-            const lang = navigator.language;
-            if (lang && lang.includes('-')) {
-              guessedCode = lang.split('-')[1].toUpperCase();
-            }
-          }
-          if (guessedCode) {
-            setSearchCountry(guessedCode);
-            setHomeCountry(guessedCode);
-            localStorage.setItem('rovix_home_country', guessedCode);
-          }
-        } catch (err) {
-          console.warn('Failed to detect fallback region', err);
-        }
+      } catch (err) {
+        console.warn('Error fetching providers for selected region', err);
       }
     };
-    detectCountry();
-  }, []);
+    fetchProvidersForCountry();
+  }, [searchCountry]);
+
+  const { code: detectedCountryCode, name: detectedCountryName, flag: detectedCountryFlag, loading: loadingGeo } = useIPGeolocation();
+
+  // Auto-detect user's country/region via IP Geolocation custom hook
+  useEffect(() => {
+    if (!loadingGeo && detectedCountryCode) {
+      const upperCode = detectedCountryCode.toUpperCase();
+      setSearchCountry(upperCode);
+      setHomeCountry(upperCode);
+      localStorage.setItem('rovix_home_country', upperCode);
+      
+      // Add dynamically if not in original COUNTRIES
+      setDynamicCountries(prev => {
+        if (prev.some(c => c.code === upperCode)) return prev;
+        return [...prev, { code: upperCode, name: detectedCountryName || upperCode, flag: detectedCountryFlag }];
+      });
+    }
+  }, [detectedCountryCode, detectedCountryName, detectedCountryFlag, loadingGeo]);
 
   const [searchSort, setSearchSort] = useState('popularity');
   const [searchPageMovies, setSearchPageMovies] = useState<Movie[]>([]);
@@ -199,6 +190,21 @@ export default function App() {
   // Watchlist tab states
   const [watchlistFilter, setWatchlistFilter] = useState<WatchlistStatus>('Plan to Watch');
   const [watchlistQuery, setWatchlistQuery] = useState('');
+  const [watchlistType, setWatchlistType] = useState<'standard' | 'custom'>('standard');
+  const [customWatchlists, setCustomWatchlists] = useState<CustomWatchlist[]>([]);
+  const [selectedCustomWatchlistId, setSelectedCustomWatchlistId] = useState<string | null>(null);
+
+  // Custom watchlist editor modal/drawer/card state
+  const [showCreateWatchlistModal, setShowCreateWatchlistModal] = useState(false);
+  const [newWlName, setNewWlName] = useState('');
+  const [newWlDesc, setNewWlDesc] = useState('');
+  const [newWlIsPrivate, setNewWlIsPrivate] = useState(false);
+
+  // Editing custom watchlist state
+  const [editingWatchlistId, setEditingWatchlistId] = useState<string | null>(null);
+  const [editWlName, setEditWlName] = useState('');
+  const [editWlDesc, setEditWlDesc] = useState('');
+  const [editWlIsPrivate, setEditWlIsPrivate] = useState(false);
 
   // Regionalized Home tab states
   const [homeCountry, setHomeCountry] = useState<string>(() => localStorage.getItem('rovix_home_country') || 'IN');
@@ -238,6 +244,7 @@ export default function App() {
     setAllReviews(getReviews());
     setAnnouncements(getAnnouncements());
     setUsersList(getUsersList());
+    setCustomWatchlists(getCustomWatchlists());
   };
 
   const loadHomeContent = async () => {
@@ -297,7 +304,12 @@ export default function App() {
     triggerToast(`Welcome back, ${u.displayName}!`);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error("Firebase signOut failed", e);
+    }
     setCurrentUser(null);
     setLocalCurrentUser(null);
     setActiveTab('home');
@@ -316,48 +328,42 @@ export default function App() {
   };
 
   // Quick Watchlist click
-  const handleQuickWatchlist = (e: React.MouseEvent, movie: Movie) => {
+  const handleQuickWatchlist = async (e: React.MouseEvent, movie: Movie) => {
     e.stopPropagation();
     if (!currentUser) return;
-    toggleWatchlist(currentUser.id, movie.id, 'Plan to Watch');
+    await toggleWatchlist(currentUser.id, movie.id, movie.title, movie.posterUrl, !!movie.isTvShow, 'Plan to Watch');
     triggerToast(`Watchlist updated for "${movie.title}"`);
     loadAllMedia();
   };
 
   // Quick rating score
-  const handleQuickRate = (e: React.MouseEvent, movieId: string, score: number) => {
+  const handleQuickRate = async (e: React.MouseEvent, movieId: string, score: number) => {
     e.stopPropagation();
     if (!currentUser) return;
-    saveRating(currentUser.id, movieId, score);
+    await saveRating(currentUser.id, movieId, score);
     triggerToast(`Rated movie ${score} Stars!`);
     loadAllMedia();
   };
 
   // Toggle user follow connection
-  const handleToggleFollowUser = (targetUser: UserType) => {
+  const handleToggleFollowUser = async (targetUser: UserType) => {
     if (!currentUser) return;
-    const isNowFollowing = toggleFollow(currentUser.id, targetUser.id);
+    const isNowFollowing = await toggleFollow(currentUser.id, targetUser.id);
     triggerToast(isNowFollowing ? `Following @${targetUser.username}` : `Unfollowed @${targetUser.username}`);
     
     // Reload user models
-    const rawUsers = localStorage.getItem('cineverse_users');
-    if (rawUsers) {
-      const parsed: UserType[] = JSON.parse(rawUsers);
-      setUsersList(parsed);
-      const updatedTarget = parsed.find(u => u.id === targetUser.id);
-      if (updatedTarget) {
-        setSelectedUserOverlay(updatedTarget);
-      }
+    const users = getUsersList();
+    setUsersList(users);
+    const updatedTarget = users.find(u => u.id === targetUser.id);
+    if (updatedTarget) {
+      setSelectedUserOverlay(updatedTarget);
     }
     setLocalCurrentUser(getCurrentUser());
   };
 
   // Sync users list from Admin operations
   const handleUpdateUsersList = () => {
-    const rawUsers = localStorage.getItem('cineverse_users');
-    if (rawUsers) {
-      setUsersList(JSON.parse(rawUsers));
-    }
+    setUsersList(getUsersList());
   };
 
   // Open User Profile Card Overlay
@@ -548,6 +554,37 @@ export default function App() {
     return b.totalRatingsCount - a.totalRatingsCount; // default popularity
   });
 
+  const [selectedCustomWlMovies, setSelectedCustomWlMovies] = useState<Movie[]>([]);
+
+  // Effect to resolve movie details for custom watchlist items
+  useEffect(() => {
+    const loadWlMovies = async () => {
+      if (!selectedCustomWatchlistId) {
+        setSelectedCustomWlMovies([]);
+        return;
+      }
+      const wl = customWatchlists.find(c => c.id === selectedCustomWatchlistId);
+      if (!wl || !wl.movieIds || wl.movieIds.length === 0) {
+        setSelectedCustomWlMovies([]);
+        return;
+      }
+      try {
+        const resolvedMovies = await Promise.all(
+          wl.movieIds.map(async (id) => {
+            const existing = allMovies.find(m => m.id === id);
+            if (existing) return existing;
+            const details = await getMovieDetails(id, false, searchCountry);
+            return details;
+          })
+        );
+        setSelectedCustomWlMovies(resolvedMovies.filter((m): m is Movie => m !== null));
+      } catch (e) {
+        console.error("Failed to load custom watchlist movies", e);
+      }
+    };
+    loadWlMovies();
+  }, [selectedCustomWatchlistId, customWatchlists, allMovies, searchCountry]);
+
   if (!currentUser) {
     return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
   }
@@ -557,6 +594,12 @@ export default function App() {
     const matchesStatus = w.status === watchlistFilter;
     const matchesQuery = w.movieTitle.toLowerCase().includes(watchlistQuery.toLowerCase());
     return matchesStatus && matchesQuery;
+  });
+
+  const myCustomWatchlists = customWatchlists.filter(cw => {
+    const matchesUser = cw.userId === currentUser.id;
+    const matchesQuery = cw.name.toLowerCase().includes(watchlistQuery.toLowerCase()) || cw.description.toLowerCase().includes(watchlistQuery.toLowerCase());
+    return matchesUser && matchesQuery;
   });
 
   const unreadNotifications = getNotifications(currentUser.id).filter(n => !n.isRead).length;
@@ -593,210 +636,254 @@ export default function App() {
         
         {/* 1. HOME TAB VIEW */}
         {activeTab === 'home' && (
-          <div className="space-y-12 animate-fadeIn pt-20 md:pt-28">
-
-            {/* General Carousels Container */}
-            <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-12">
-              
-              {loadingHomeContent ? (
-                /* Dynamic Skeleton Loading State */
-                <div className="space-y-10 animate-pulse">
-                  {[1, 2, 3].map(i => (
-                    <div key={i} className="space-y-4">
-                      <div className="h-8 bg-[#181818] rounded-xl w-64" />
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
-                        {[1, 2, 3, 4, 5].map(j => (
-                          <div key={j} className="h-[300px] bg-[#111111] rounded-[2rem] border border-white/5" />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+          <div className="space-y-8 pt-20 md:pt-28 animate-fadeIn">
+            {/* Sub-tab selection for Home page */}
+            {currentUser && (
+              <div className="max-w-7xl mx-auto px-4 md:px-8">
+                <div className="flex gap-2 p-1.5 bg-black/40 border border-white/5 rounded-2xl w-full max-w-md mx-auto sm:mx-0 backdrop-blur-xl">
+                  <button
+                    onClick={() => setHomeSubTab('featured')}
+                    className={`flex-1 py-2.5 rounded-xl text-[10px] sm:text-xs font-mono font-bold uppercase tracking-wider transition-all duration-300 flex items-center justify-center space-x-2 cursor-pointer ${
+                      homeSubTab === 'featured'
+                        ? 'bg-[#F5C518] text-black font-black shadow-md'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    <Globe className="w-4 h-4" />
+                    <span>Featured Cinema</span>
+                  </button>
+                  <button
+                    onClick={() => setHomeSubTab('personalized')}
+                    className={`flex-1 py-2.5 rounded-xl text-[10px] sm:text-xs font-mono font-bold uppercase tracking-wider transition-all duration-300 flex items-center justify-center space-x-2 cursor-pointer ${
+                      homeSubTab === 'personalized'
+                        ? 'bg-[#F5C518] text-black font-black shadow-md'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>Personal Discovery</span>
+                  </button>
                 </div>
-              ) : (
-                <>
-                  {/* Immersive Hero cinematic spotlight */}
-                  {(() => {
-                    const heroMovie = homeSpotlightMovies[0] || {
-                      id: 'm_1',
-                      title: 'Dune: Part Two',
-                      overview: "Paul Atreides unites with Chani and the Fremen while on a warpath of revenge against the conspirators who destroyed his family. Experience Denis Villeneuve's masterpiece.",
-                      backdropPath: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1200&auto=format&fit=crop&q=80',
-                      genres: ['Sci-Fi', 'Adventure'],
-                      isTvShow: false,
-                      releaseDate: '2024-03-01'
-                    };
-                    return (
-                      <div className="relative h-[380px] md:h-[580px] max-w-7xl mx-auto rounded-[2.5rem] md:rounded-[3rem] overflow-hidden border border-white/5 shadow-2xl bg-zinc-950">
-                        <div className="absolute inset-0 z-0">
-                          <img
-                            src={heroMovie.backdropPath || "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1200&auto=format&fit=crop&q=80"}
-                            alt={heroMovie.title}
-                            className="w-full h-full object-cover opacity-60 transition-transform duration-1000 ease-out hover:scale-105"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-[#090909] via-[#090909]/65 to-transparent" />
-                        </div>
+              </div>
+            )}
 
-                        <div className="absolute bottom-10 left-6 md:left-14 max-w-2xl space-y-4 z-10">
-                          <div className="flex gap-2">
-                            <span className="px-4 py-1.5 bg-[#F5C518] text-black text-[9px] font-black rounded-full uppercase tracking-widest font-mono shadow-lg shadow-[#F5C518]/20">
-                              Featured Spotlight
-                            </span>
-                            <span className="px-4 py-1.5 bg-white/5 backdrop-blur-xl text-white text-[9px] font-black rounded-full uppercase tracking-widest font-mono border border-white/10">
-                              {heroMovie.genres && heroMovie.genres.length > 0 ? heroMovie.genres.slice(0, 2).join(' / ') : 'Movie Blockbuster'}
-                            </span>
+            {homeSubTab === 'personalized' && currentUser ? (
+              <PersonalizedHomeFeed
+                currentUser={currentUser}
+                allMovies={allMovies}
+                allReviews={allReviews}
+                usersList={usersList}
+                followsList={getFollowsList()}
+                onMovieClick={handleMovieClick}
+                onQuickWatchlist={handleQuickWatchlist}
+                onQuickRate={(movieId, rating) => handleQuickRate({ stopPropagation: () => {} } as any, movieId, rating)}
+              />
+            ) : (
+              <div className="space-y-12">
+                {/* General Carousels Container */}
+                <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-12">
+                  
+                  {loadingHomeContent ? (
+                    /* Dynamic Skeleton Loading State */
+                    <div className="space-y-10 animate-pulse">
+                      {[1, 2, 3].map(i => (
+                        <div key={i} className="space-y-4">
+                          <div className="h-8 bg-[#181818] rounded-xl w-64" />
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                            {[1, 2, 3, 4, 5].map(j => (
+                              <div key={j} className="h-[300px] bg-[#111111] rounded-[2rem] border border-white/5" />
+                            ))}
                           </div>
-                          <h1 className="text-4xl md:text-7xl font-sans font-black tracking-tighter text-white uppercase leading-none">
-                            {heroMovie.title}
-                          </h1>
-                          <p className="text-zinc-300 text-xs md:text-sm leading-relaxed line-clamp-3 font-medium">
-                            {heroMovie.overview}
-                          </p>
-                          <div className="flex gap-3 pt-3">
-                            <button
-                              onClick={() => handleMovieClick(heroMovie.id, !!heroMovie.isTvShow)}
-                              className="px-8 py-3.5 bg-white text-black hover:bg-[#F5C518] font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase flex items-center space-x-1.5 shadow-lg shadow-white/5 cursor-pointer hover:scale-105"
-                            >
-                              <span>View Specifications</span>
-                              <ArrowUpRight className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={(e) => handleQuickWatchlist(e, heroMovie)}
-                              className="px-8 py-3.5 bg-white/5 backdrop-blur-xl border border-white/10 text-white hover:bg-white/15 font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase cursor-pointer hover:scale-105"
-                            >
-                              + Quick Add
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* World & Hollywood Blockbusters Carousel */}
-                  {homeWorldMovies.length > 0 && (
-                    <div className="pt-6">
-                      <HorizontalCarousel
-                        title="World & Hollywood Blockbusters"
-                        icon={<Globe className="w-5.5 h-5.5 text-[#F5C518]" />}
-                        items={homeWorldMovies}
-                        onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
-                        onQuickWatchlist={handleQuickWatchlist}
-                        onQuickRate={handleQuickRate}
-                        currentUserId={currentUser.id}
-                      />
-                    </div>
-                  )}
-
-                  {/* Indian Cinema Carousel */}
-                  {homeIndianMovies.length > 0 && (
-                    <HorizontalCarousel
-                      title="Indian Cinema"
-                      icon={<Sparkles className="w-5.5 h-5.5 text-[#F5C518]" />}
-                      items={homeIndianMovies}
-                      onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
-                      onQuickWatchlist={handleQuickWatchlist}
-                      onQuickRate={handleQuickRate}
-                      currentUserId={currentUser.id}
-                    />
-                  )}
-
-                  {/* Trending TV Shows Carousel */}
-                  {homeTVShows.length > 0 && (
-                    <HorizontalCarousel
-                      title="Trending TV Shows"
-                      icon={<Tv className="w-5.5 h-5.5 text-[#F5C518]" />}
-                      items={homeTVShows}
-                      onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
-                      onQuickWatchlist={handleQuickWatchlist}
-                      onQuickRate={handleQuickRate}
-                      currentUserId={currentUser.id}
-                    />
-                  )}
-
-                  {/* Top Rated Masterpieces Carousel */}
-                  {homeSpotlightMovies.length > 0 && (
-                    <HorizontalCarousel
-                      title="Critically Acclaimed Masterpieces"
-                      icon={<Flame className="w-5.5 h-5.5 text-[#F5C518]" />}
-                      items={homeSpotlightMovies}
-                      onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
-                      onQuickWatchlist={handleQuickWatchlist}
-                      onQuickRate={handleQuickRate}
-                      currentUserId={currentUser.id}
-                    />
-                  )}
-                </>
-              )}
-
-              {/* Grid: Community Reviews + Friends Activity Panel */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                
-                {/* Community reviews */}
-                <div className="lg:col-span-2 space-y-6">
-                  <h3 className="text-2xl font-sans font-black tracking-tight text-white uppercase">Community Critic Logs</h3>
-                  <div className="space-y-4">
-                    {allReviews.slice(0, 3).map(rev => (
-                      <div key={rev.id} className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 hover:border-[#F5C518]/30 transition-all duration-300 shadow-md">
-                        <div className="flex justify-between">
-                          <div className="flex items-center space-x-3">
-                            <img src={rev.userAvatar} alt={rev.username} className="w-9 h-9 rounded-full object-cover cursor-pointer border border-[#F5C518]/30 hover:scale-105 transition" onClick={() => handleOpenUserOverlay(rev.username)} />
-                            <div>
-                              <span className="font-black text-xs text-white hover:text-[#F5C518] cursor-pointer block" onClick={() => handleOpenUserOverlay(rev.username)}>
-                                @{rev.username}
-                              </span>
-                              <p className="text-[10px] text-zinc-500 font-mono font-semibold uppercase">Logged notes for {rev.movieTitle}</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center text-[#F5C518] text-xs font-mono font-bold bg-white/5 px-2.5 py-1 rounded-xl">
-                            <Star className="w-3.5 h-3.5 fill-current mr-1 text-[#F5C518]" />
-                            <span>{rev.rating}</span>
-                          </div>
-                        </div>
-                        <h4 className="font-black text-white text-sm">{rev.title}</h4>
-                        <p className="text-zinc-400 text-xs leading-relaxed line-clamp-3">{rev.body}</p>
-                        <button onClick={() => handleMovieClick(rev.movieId, rev.isTvShow)} className="text-[10px] text-[#F5C518] font-black uppercase tracking-wider hover:underline block cursor-pointer">
-                          Read Full Review
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Friends Activity Placeholder */}
-                <div className="space-y-6">
-                  <h3 className="text-2xl font-sans font-black tracking-tight text-white uppercase">Friends Network</h3>
-                  <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] text-center space-y-4 shadow-md">
-                    <Users className="w-8 h-8 mx-auto text-zinc-500" />
-                    <div className="space-y-1">
-                      <p className="text-sm font-black text-white">Sync your network feed</p>
-                      <p className="text-xs text-zinc-500 leading-relaxed font-medium">
-                        Follow film lovers inside Profile settings to monitor what they watch, rate, and review.
-                      </p>
-                    </div>
-                    
-                    {/* Simulated live community recommendation profiles */}
-                    <div className="pt-3 divide-y divide-white/5 text-left text-xs">
-                      {usersList.filter(u => u.id !== currentUser.id).slice(0, 3).map(u => (
-                        <div key={u.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
-                          <div className="flex items-center space-x-2.5">
-                            <img src={u.avatarUrl} alt={u.username} className="w-7 h-7 rounded-full object-cover border border-white/5" />
-                            <span className="font-bold text-zinc-300">@{u.username}</span>
-                          </div>
-                          <button
-                            onClick={() => handleOpenUserOverlay(u.username)}
-                            className="text-[10px] text-[#F5C518] font-black uppercase tracking-wider hover:underline cursor-pointer"
-                          >
-                            View Bio
-                          </button>
                         </div>
                       ))}
                     </div>
+                  ) : (
+                    <>
+                      {/* Immersive Hero cinematic spotlight */}
+                      {(() => {
+                        const heroMovie = homeSpotlightMovies[0] || {
+                          id: 'm_1',
+                          title: 'Dune: Part Two',
+                          overview: "Paul Atreides unites with Chani and the Fremen while on a warpath of revenge against the conspirators who destroyed his family. Experience Denis Villeneuve's masterpiece.",
+                          backdropPath: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1200&auto=format&fit=crop&q=80',
+                          genres: ['Sci-Fi', 'Adventure'],
+                          isTvShow: false,
+                          releaseDate: '2024-03-01'
+                        };
+                        return (
+                          <div className="relative h-[380px] md:h-[580px] max-w-7xl mx-auto rounded-[2.5rem] md:rounded-[3rem] overflow-hidden border border-white/5 shadow-2xl bg-zinc-950">
+                            <div className="absolute inset-0 z-0">
+                              <img
+                                src={heroMovie.backdropPath || "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1200&auto=format&fit=crop&q=80"}
+                                alt={heroMovie.title}
+                                className="w-full h-full object-cover opacity-60 transition-transform duration-1000 ease-out hover:scale-105"
+                                referrerPolicy="no-referrer"
+                              />
+                              <div className="absolute inset-0 bg-gradient-to-t from-[#090909] via-[#090909]/65 to-transparent" />
+                            </div>
+
+                            <div className="absolute bottom-10 left-6 md:left-14 max-w-2xl space-y-4 z-10">
+                              <div className="flex gap-2">
+                                <span className="px-4 py-1.5 bg-[#F5C518] text-black text-[9px] font-black rounded-full uppercase tracking-widest font-mono shadow-lg shadow-[#F5C518]/20">
+                                  Featured Spotlight
+                                </span>
+                                <span className="px-4 py-1.5 bg-white/5 backdrop-blur-xl text-white text-[9px] font-black rounded-full uppercase tracking-widest font-mono border border-white/10">
+                                  {heroMovie.genres && heroMovie.genres.length > 0 ? heroMovie.genres.slice(0, 2).join(' / ') : 'Movie Blockbuster'}
+                                </span>
+                              </div>
+                              <h1 className="text-4xl md:text-7xl font-sans font-black tracking-tighter text-white uppercase leading-none">
+                                {heroMovie.title}
+                              </h1>
+                              <p className="text-zinc-300 text-xs md:text-sm leading-relaxed line-clamp-3 font-medium">
+                                {heroMovie.overview}
+                              </p>
+                              <div className="flex gap-3 pt-3">
+                                <button
+                                  onClick={() => handleMovieClick(heroMovie.id, !!heroMovie.isTvShow)}
+                                  className="px-8 py-3.5 bg-white text-black hover:bg-[#F5C518] font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase flex items-center space-x-1.5 shadow-lg shadow-white/5 cursor-pointer hover:scale-105"
+                                >
+                                  <span>View Specifications</span>
+                                  <ArrowUpRight className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={(e) => handleQuickWatchlist(e, heroMovie)}
+                                  className="px-8 py-3.5 bg-white/5 backdrop-blur-xl border border-white/10 text-white hover:bg-white/15 font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase cursor-pointer hover:scale-105"
+                                >
+                                  + Quick Add
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* World & Hollywood Blockbusters Carousel */}
+                      {homeWorldMovies.length > 0 && (
+                        <div className="pt-6">
+                          <HorizontalCarousel
+                            title="World & Hollywood Blockbusters"
+                            icon={<Globe className="w-5.5 h-5.5 text-[#F5C518]" />}
+                            items={homeWorldMovies}
+                            onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
+                            onQuickWatchlist={handleQuickWatchlist}
+                            onQuickRate={handleQuickRate}
+                            currentUserId={currentUser ? currentUser.id : ''}
+                          />
+                        </div>
+                      )}
+
+                      {/* Indian Cinema Carousel */}
+                      {homeIndianMovies.length > 0 && (
+                        <HorizontalCarousel
+                          title="Indian Cinema"
+                          icon={<Sparkles className="w-5.5 h-5.5 text-[#F5C518]" />}
+                          items={homeIndianMovies}
+                          onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
+                          onQuickWatchlist={handleQuickWatchlist}
+                          onQuickRate={handleQuickRate}
+                          currentUserId={currentUser ? currentUser.id : ''}
+                        />
+                      )}
+
+                      {/* Trending TV Shows Carousel */}
+                      {homeTVShows.length > 0 && (
+                        <HorizontalCarousel
+                          title="Trending TV Shows"
+                          icon={<Tv className="w-5.5 h-5.5 text-[#F5C518]" />}
+                          items={homeTVShows}
+                          onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
+                          onQuickWatchlist={handleQuickWatchlist}
+                          onQuickRate={handleQuickRate}
+                          currentUserId={currentUser ? currentUser.id : ''}
+                        />
+                      )}
+
+                      {/* Top Rated Masterpieces Carousel */}
+                      {homeSpotlightMovies.length > 0 && (
+                        <HorizontalCarousel
+                          title="Critically Acclaimed Masterpieces"
+                          icon={<Flame className="w-5.5 h-5.5 text-[#F5C518]" />}
+                          items={homeSpotlightMovies}
+                          onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
+                          onQuickWatchlist={handleQuickWatchlist}
+                          onQuickRate={handleQuickRate}
+                          currentUserId={currentUser ? currentUser.id : ''}
+                        />
+                      )}
+                    </>
+                  )}
+
+                  {/* Grid: Community Reviews + Friends Activity Panel */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    
+                    {/* Community reviews */}
+                    <div className="lg:col-span-2 space-y-6">
+                      <h3 className="text-2xl font-sans font-black tracking-tight text-white uppercase">Community Critic Logs</h3>
+                      <div className="space-y-4">
+                        {allReviews.slice(0, 3).map(rev => (
+                          <div key={rev.id} className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 hover:border-[#F5C518]/30 transition-all duration-300 shadow-md">
+                            <div className="flex justify-between">
+                              <div className="flex items-center space-x-3">
+                                <img src={rev.userAvatar} alt={rev.username} className="w-9 h-9 rounded-full object-cover cursor-pointer border border-[#F5C518]/30 hover:scale-105 transition" onClick={() => handleOpenUserOverlay(rev.username)} />
+                                <div>
+                                  <span className="font-black text-xs text-white hover:text-[#F5C518] cursor-pointer block" onClick={() => handleOpenUserOverlay(rev.username)}>
+                                    @{rev.username}
+                                  </span>
+                                  <p className="text-[10px] text-zinc-500 font-mono font-semibold uppercase">Logged notes for {rev.movieTitle}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center text-[#F5C518] text-xs font-mono font-bold bg-white/5 px-2.5 py-1 rounded-xl">
+                                <Star className="w-3.5 h-3.5 fill-current mr-1 text-[#F5C518]" />
+                                <span>{rev.rating}</span>
+                              </div>
+                            </div>
+                            <h4 className="font-black text-white text-sm">{rev.title}</h4>
+                            <p className="text-zinc-400 text-xs leading-relaxed line-clamp-3">{rev.body}</p>
+                            <button onClick={() => handleMovieClick(rev.movieId, rev.isTvShow)} className="text-[10px] text-[#F5C518] font-black uppercase tracking-wider hover:underline block cursor-pointer">
+                              Read Full Review
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Friends Activity Panel */}
+                    <div className="space-y-6">
+                      <h3 className="text-2xl font-sans font-black tracking-tight text-white uppercase">Friends Network</h3>
+                      <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] text-center space-y-4 shadow-md">
+                        <Users className="w-8 h-8 mx-auto text-zinc-500" />
+                        <div className="space-y-1">
+                          <p className="text-sm font-black text-white">Sync your network feed</p>
+                          <p className="text-xs text-zinc-500 leading-relaxed font-medium">
+                            Follow film lovers inside Profile settings to monitor what they watch, rate, and review.
+                          </p>
+                        </div>
+                        
+                        {/* Simulated live community recommendation profiles */}
+                        <div className="pt-3 divide-y divide-white/5 text-left text-xs">
+                          {usersList.filter(u => currentUser ? u.id !== currentUser.id : true).slice(0, 3).map(u => (
+                            <div key={u.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
+                              <div className="flex items-center space-x-2.5">
+                                <img src={u.avatarUrl} alt={u.username} className="w-7 h-7 rounded-full object-cover border border-white/5" />
+                                <span className="font-bold text-zinc-300">@{u.username}</span>
+                              </div>
+                              <button
+                                onClick={() => handleOpenUserOverlay(u.username)}
+                                className="text-[10px] text-[#F5C518] font-black uppercase tracking-wider hover:underline cursor-pointer"
+                              >
+                                View Bio
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
                   </div>
+
                 </div>
-
               </div>
-
-            </div>
+            )}
           </div>
         )}
 
@@ -863,9 +950,9 @@ export default function App() {
 
               {/* Box 3: Streaming Platform quick filters */}
               <div className="md:col-span-3 bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
-                <h3 className="font-black text-sm uppercase tracking-wider text-white">Filter by Streaming Provider</h3>
+                <h3 className="font-black text-sm uppercase tracking-wider text-white">Filter by Streaming Provider in Your Country</h3>
                 <div className="flex flex-wrap gap-3">
-                  {['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Max', 'JioCinema', 'Hotstar', 'Zee5'].map(platform => (
+                  {availableProviders.slice(0, 12).map(platform => (
                     <div
                       key={platform}
                       onClick={() => {
@@ -1021,7 +1108,7 @@ export default function App() {
                     className="w-full bg-[#181818] border border-white/5 hover:border-white/20 rounded-xl p-3 text-white outline-none cursor-pointer transition focus:border-[#F5C518]/60 focus:ring-1 focus:ring-[#F5C518]/60 text-xs"
                   >
                     <option value="">All Platforms</option>
-                    {['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Max', 'Hulu', 'Crunchyroll', 'Peacock', 'Paramount+', 'JioCinema', 'Hotstar', 'Zee5', 'SonyLIV', 'YouTube', 'Google Play Movies'].map(p => (
+                    {availableProviders.map(p => (
                       <option key={p} value={p}>{p}</option>
                     ))}
                   </select>
@@ -1116,63 +1203,471 @@ export default function App() {
           <div className="max-w-7xl mx-auto px-4 md:px-8 pt-20 md:pt-28 space-y-8 animate-fadeIn">
             
             {/* Header */}
-            <div>
-              <h1 className="text-3xl font-sans font-black tracking-tight text-white uppercase">Your Film Watchlists</h1>
-              <p className="text-zinc-400 text-xs md:text-sm font-medium">Manage planning lists, active programs, completed movies, and favorite titles.</p>
-            </div>
-
-            {/* Query filter / status tabs */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-              
-              {/* Watch status filter Tabs */}
-              <div className="md:col-span-2 flex border-b border-white/5 space-x-6">
-                {(['Plan to Watch', 'Watching', 'Completed', 'Favorites'] as WatchlistStatus[]).map(status => (
-                  <button
-                    key={status}
-                    onClick={() => setWatchlistFilter(status)}
-                    className={`pb-3.5 text-xs md:text-sm font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
-                      watchlistFilter === status
-                        ? 'text-[#F5C518] border-b-2 border-[#F5C518] font-black'
-                        : 'text-zinc-500 hover:text-white'
-                    }`}
-                  >
-                    {status}
-                  </button>
-                ))}
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <h1 className="text-3xl font-sans font-black tracking-tight text-white uppercase">Your Film Watchlists</h1>
+                <p className="text-zinc-400 text-xs md:text-sm font-medium">Manage planning lists, active statuses, or build your own public and private themed playlists.</p>
               </div>
 
-              {/* Query filter inside watchlist */}
-              <input
-                type="text"
-                value={watchlistQuery}
-                onChange={e => setWatchlistQuery(e.target.value)}
-                placeholder="Search inside current list..."
-                className="bg-[#111111]/90 border border-white/5 rounded-2xl px-4 py-3 text-xs text-white outline-none focus:border-[#F5C518] shadow-md transition-all duration-300"
-              />
-
+              {/* Master Mode Toggles */}
+              <div className="flex bg-[#111111]/90 border border-white/5 p-1 rounded-2xl shrink-0 self-start">
+                <button
+                  onClick={() => { setWatchlistType('standard'); setSelectedCustomWatchlistId(null); }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    watchlistType === 'standard'
+                      ? 'bg-[#F5C518] text-black font-black'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  📁 Standard Statuses
+                </button>
+                <button
+                  onClick={() => setWatchlistType('custom')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    watchlistType === 'custom'
+                      ? 'bg-[#F5C518] text-black font-black'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  🎬 Custom Playlists
+                </button>
+              </div>
             </div>
 
-            {/* Grid of Watchlist Items */}
-            {myWatchlistItems.length === 0 ? (
-              <div className="text-center py-20 border border-dashed border-white/5 rounded-[2rem] text-zinc-500 italic text-sm bg-[#111111]/40">
-                No films under "{watchlistFilter}" watchlist currently. Explore titles to add items!
-              </div>
+            {watchlistType === 'standard' ? (
+              <>
+                {/* Query filter / status tabs */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+                  
+                  {/* Watch status filter Tabs */}
+                  <div className="md:col-span-2 flex border-b border-white/5 space-x-6">
+                    {(['Plan to Watch', 'Watching', 'Completed', 'Favorites'] as WatchlistStatus[]).map(status => (
+                      <button
+                        key={status}
+                        onClick={() => setWatchlistFilter(status)}
+                        className={`pb-3.5 text-xs md:text-sm font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
+                          watchlistFilter === status
+                            ? 'text-[#F5C518] border-b-2 border-[#F5C518] font-black'
+                            : 'text-zinc-500 hover:text-white'
+                        }`}
+                      >
+                        {status}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Query filter inside watchlist */}
+                  <input
+                    type="text"
+                    value={watchlistQuery}
+                    onChange={e => setWatchlistQuery(e.target.value)}
+                    placeholder="Search inside current list..."
+                    className="bg-[#111111]/90 border border-white/5 rounded-2xl px-4 py-3 text-xs text-white outline-none focus:border-[#F5C518] shadow-md transition-all duration-300"
+                  />
+
+                </div>
+
+                {/* Grid of Watchlist Items */}
+                {myWatchlistItems.length === 0 ? (
+                  <div className="text-center py-20 border border-dashed border-white/5 rounded-[2rem] text-zinc-500 italic text-sm bg-[#111111]/40">
+                    No films under "{watchlistFilter}" watchlist currently. Explore titles to add items!
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                    {myWatchlistItems.map(item => {
+                      const actualMovie = allMovies.find(m => m.id === item.movieId);
+                      if (!actualMovie) return null;
+                      return (
+                        <MovieShowcaseCard
+                          key={item.movieId}
+                          movie={actualMovie}
+                          onClick={() => handleMovieClick(item.movieId, item.isTvShow)}
+                          onQuickWatchlist={(e) => handleQuickWatchlist(e, actualMovie)}
+                          onQuickRate={(e, score) => handleQuickRate(e, item.movieId, score)}
+                          currentUserId={currentUser.id}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
-                {myWatchlistItems.map(item => {
-                  const actualMovie = allMovies.find(m => m.id === item.movieId);
-                  if (!actualMovie) return null;
-                  return (
-                    <MovieShowcaseCard
-                      key={item.movieId}
-                      movie={actualMovie}
-                      onClick={() => handleMovieClick(item.movieId, item.isTvShow)}
-                      onQuickWatchlist={(e) => handleQuickWatchlist(e, actualMovie)}
-                      onQuickRate={(e, score) => handleQuickRate(e, item.movieId, score)}
-                      currentUserId={currentUser.id}
-                    />
-                  );
-                })}
+              // CUSTOM WATCHLISTS WORKSPACE
+              <div className="space-y-6">
+                {selectedCustomWatchlistId === null ? (
+                  <>
+                    {/* Top actions bar */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <input
+                        type="text"
+                        value={watchlistQuery}
+                        onChange={e => setWatchlistQuery(e.target.value)}
+                        placeholder="Search playlists..."
+                        className="bg-[#111111]/90 border border-white/5 rounded-2xl px-4 py-3.5 text-xs text-white outline-none focus:border-[#F5C518] shadow-md transition-all duration-300 w-full sm:max-w-xs"
+                      />
+                      
+                      <button
+                        onClick={() => {
+                          setShowCreateWatchlistModal(!showCreateWatchlistModal);
+                          setEditingWatchlistId(null);
+                        }}
+                        className="bg-[#F5C518] hover:bg-[#F5C518]/90 text-black px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-wider transition-all duration-300 shrink-0 cursor-pointer flex items-center space-x-1.5"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>Create Custom Playlist</span>
+                      </button>
+                    </div>
+
+                    {/* Inline Create Form */}
+                    {showCreateWatchlistModal && (
+                      <div className="bg-[#111111]/80 border border-white/10 p-6 rounded-[2rem] space-y-4 animate-fadeIn">
+                        <div className="flex justify-between items-center border-b border-white/5 pb-3">
+                          <h3 className="font-sans font-black text-sm text-[#F5C518] uppercase tracking-wider">New Custom Playlist Setup</h3>
+                          <button onClick={() => setShowCreateWatchlistModal(false)} className="text-zinc-500 hover:text-white cursor-pointer">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-zinc-400 text-[10px] font-bold uppercase mb-1">Playlist Name</label>
+                            <input
+                              type="text"
+                              value={newWlName}
+                              onChange={e => setNewWlName(e.target.value)}
+                              placeholder="e.g. Christopher Nolan Marathon..."
+                              className="w-full bg-zinc-950 border border-white/5 rounded-xl p-3 text-white text-xs outline-none focus:border-[#F5C518]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-zinc-400 text-[10px] font-bold uppercase mb-1">Visibility Privacy</label>
+                            <div className="flex space-x-4 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => setNewWlIsPrivate(false)}
+                                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1.5 border ${
+                                  !newWlIsPrivate
+                                    ? 'bg-green-500/10 text-green-400 border-green-500/30 font-black'
+                                    : 'bg-zinc-950 border-white/5 text-zinc-500'
+                                }`}
+                              >
+                                <Globe className="w-3.5 h-3.5" />
+                                <span>Public</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setNewWlIsPrivate(true)}
+                                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1.5 border ${
+                                  newWlIsPrivate
+                                    ? 'bg-red-500/10 text-red-400 border-red-500/30 font-black'
+                                    : 'bg-zinc-950 border-white/5 text-zinc-500'
+                                }`}
+                              >
+                                <Bookmark className="w-3.5 h-3.5" />
+                                <span>Private</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-zinc-400 text-[10px] font-bold uppercase mb-1">Playlist Description</label>
+                          <textarea
+                            value={newWlDesc}
+                            onChange={e => setNewWlDesc(e.target.value)}
+                            placeholder="Describe the cinematic theme of this custom watchlist..."
+                            rows={3}
+                            className="w-full bg-zinc-950 border border-white/5 rounded-xl p-3 text-white text-xs outline-none focus:border-[#F5C518] leading-relaxed"
+                          />
+                        </div>
+
+                        <div className="flex justify-end space-x-3">
+                          <button
+                            type="button"
+                            onClick={() => setShowCreateWatchlistModal(false)}
+                            className="px-4 py-2 border border-white/5 hover:bg-white/5 rounded-xl text-zinc-400 hover:text-white transition cursor-pointer text-xs uppercase font-bold"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!newWlName.trim()) return;
+                              await createCustomWatchlist(currentUser.id, newWlName.trim(), newWlDesc.trim(), newWlIsPrivate);
+                              setNewWlName('');
+                              setNewWlDesc('');
+                              setNewWlIsPrivate(false);
+                              setShowCreateWatchlistModal(false);
+                              setCustomWatchlists(getCustomWatchlists());
+                              triggerToast('Custom playlist established!');
+                            }}
+                            className="bg-[#F5C518] hover:bg-[#F5C518]/90 text-black px-5 py-2 rounded-xl font-bold transition cursor-pointer text-xs uppercase"
+                          >
+                            Create Watchlist
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Inline Edit Form */}
+                    {editingWatchlistId !== null && (
+                      <div className="bg-[#111111]/80 border border-white/10 p-6 rounded-[2rem] space-y-4 animate-fadeIn">
+                        <div className="flex justify-between items-center border-b border-white/5 pb-3">
+                          <h3 className="font-sans font-black text-sm text-[#F5C518] uppercase tracking-wider">Edit Playlist Details</h3>
+                          <button onClick={() => setEditingWatchlistId(null)} className="text-zinc-500 hover:text-white cursor-pointer">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-zinc-400 text-[10px] font-bold uppercase mb-1">Playlist Name</label>
+                            <input
+                              type="text"
+                              value={editWlName}
+                              onChange={e => setEditWlName(e.target.value)}
+                              className="w-full bg-zinc-950 border border-white/5 rounded-xl p-3 text-white text-xs outline-none focus:border-[#F5C518]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-zinc-400 text-[10px] font-bold uppercase mb-1">Visibility Privacy</label>
+                            <div className="flex space-x-4 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => setEditWlIsPrivate(false)}
+                                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1.5 border ${
+                                  !editWlIsPrivate
+                                    ? 'bg-green-500/10 text-green-400 border-green-500/30 font-black'
+                                    : 'bg-zinc-950 border-white/5 text-zinc-500'
+                                }`}
+                              >
+                                <Globe className="w-3.5 h-3.5" />
+                                <span>Public</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditWlIsPrivate(true)}
+                                className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1.5 border ${
+                                  editWlIsPrivate
+                                    ? 'bg-red-500/10 text-red-400 border-red-500/30 font-black'
+                                    : 'bg-zinc-950 border-white/5 text-zinc-500'
+                                }`}
+                              >
+                                <Bookmark className="w-3.5 h-3.5" />
+                                <span>Private</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-zinc-400 text-[10px] font-bold uppercase mb-1">Playlist Description</label>
+                          <textarea
+                            value={editWlDesc}
+                            onChange={e => setEditWlDesc(e.target.value)}
+                            rows={3}
+                            className="w-full bg-zinc-950 border border-white/5 rounded-xl p-3 text-white text-xs outline-none focus:border-[#F5C518] leading-relaxed"
+                          />
+                        </div>
+
+                        <div className="flex justify-end space-x-3">
+                          <button
+                            type="button"
+                            onClick={() => setEditingWatchlistId(null)}
+                            className="px-4 py-2 border border-white/5 hover:bg-white/5 rounded-xl text-zinc-400 hover:text-white transition cursor-pointer text-xs uppercase font-bold"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!editWlName.trim()) return;
+                              await updateCustomWatchlist(editingWatchlistId, {
+                                name: editWlName.trim(),
+                                description: editWlDesc.trim(),
+                                isPrivate: editWlIsPrivate
+                              });
+                              setEditingWatchlistId(null);
+                              setCustomWatchlists(getCustomWatchlists());
+                              triggerToast('Playlist specifications updated!');
+                            }}
+                            className="bg-[#F5C518] hover:bg-[#F5C518]/90 text-black px-5 py-2 rounded-xl font-bold transition cursor-pointer text-xs uppercase"
+                          >
+                            Save Specifications
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Playlist items grid */}
+                    {myCustomWatchlists.length === 0 ? (
+                      <div className="text-center py-20 border border-dashed border-white/5 rounded-[2rem] text-zinc-500 italic text-sm bg-[#111111]/40">
+                        No custom playlists found. Launch a themed list to organize custom movie stacks!
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {myCustomWatchlists.map(wl => (
+                          <div
+                            key={wl.id}
+                            className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2.2rem] flex flex-col justify-between space-y-4 hover:border-white/10 hover:bg-[#1A1A1A] transition duration-300 shadow-xl"
+                          >
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className={`text-[9px] px-2 py-0.5 rounded-full font-mono font-bold uppercase flex items-center space-x-1 ${
+                                  wl.isPrivate
+                                    ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                                    : 'bg-green-500/10 text-green-400 border border-green-500/20'
+                                }`}>
+                                  {wl.isPrivate ? (
+                                    <>
+                                      <span className="w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse mr-1"></span>
+                                      <span>Private List</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Globe className="w-2.5 h-2.5 text-green-400 mr-1" />
+                                      <span>Public Stack</span>
+                                    </>
+                                  )}
+                                </span>
+                                
+                                <span className="text-[10px] font-mono text-zinc-500 font-bold uppercase">
+                                  {wl.movieIds.length} {wl.movieIds.length === 1 ? 'Title' : 'Titles'}
+                                </span>
+                              </div>
+
+                              <h3 className="text-lg font-sans font-black text-white leading-snug truncate">
+                                {wl.name}
+                              </h3>
+                              
+                              <p className="text-xs text-zinc-400 leading-relaxed line-clamp-2 h-10">
+                                {wl.description || 'No description provided for this collection.'}
+                              </p>
+                            </div>
+
+                            <div className="pt-2 border-t border-white/5 flex items-center justify-between gap-2">
+                              <button
+                                onClick={() => setSelectedCustomWatchlistId(wl.id)}
+                                className="flex-1 bg-white/5 hover:bg-[#F5C518] hover:text-black text-white text-xs font-bold uppercase tracking-wider py-2.5 rounded-xl transition cursor-pointer text-center"
+                              >
+                                View Titles
+                              </button>
+                              
+                              <button
+                                onClick={() => {
+                                  setEditingWatchlistId(wl.id);
+                                  setEditWlName(wl.name);
+                                  setEditWlDesc(wl.description);
+                                  setEditWlIsPrivate(wl.isPrivate);
+                                  setShowCreateWatchlistModal(false);
+                                }}
+                                className="p-2.5 bg-zinc-900 border border-white/5 hover:border-white/10 text-zinc-400 hover:text-white rounded-xl text-xs transition cursor-pointer"
+                                title="Edit specs"
+                              >
+                                <Settings className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                onClick={async () => {
+                                  if (confirm(`Are you sure you want to delete "${wl.name}"?`)) {
+                                    await deleteCustomWatchlist(wl.id);
+                                    setCustomWatchlists(getCustomWatchlists());
+                                    triggerToast(`Deleted custom playlist.`);
+                                  }
+                                }}
+                                className="p-2.5 bg-zinc-900 border border-white/5 hover:border-red-500/20 text-zinc-400 hover:text-red-400 rounded-xl text-xs transition cursor-pointer"
+                                title="Delete list"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  // EXPANDED CUSTOM PLAYLIST DETAILS VIEW
+                  <div className="space-y-6">
+                    {(() => {
+                      const wl = customWatchlists.find(c => c.id === selectedCustomWatchlistId);
+                      if (!wl) return null;
+                      return (
+                        <div className="space-y-6">
+                          {/* Top navigation */}
+                          <button
+                            onClick={() => setSelectedCustomWatchlistId(null)}
+                            className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 hover:text-[#F5C518] transition cursor-pointer flex items-center space-x-1"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                            <span>Return to Playlists</span>
+                          </button>
+
+                          {/* Playlist header specs */}
+                          <div className="bg-[#111111]/70 border border-white/5 p-6 md:p-8 rounded-[2.5rem] space-y-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <h2 className="text-2xl font-sans font-black tracking-tight text-white uppercase">{wl.name}</h2>
+                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-mono font-bold uppercase ${
+                                wl.isPrivate
+                                  ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                                  : 'bg-green-500/10 text-green-400 border border-green-500/20'
+                              }`}>
+                                {wl.isPrivate ? 'Private Playlist' : 'Public Playlist'}
+                              </span>
+                            </div>
+                            
+                            {wl.description && (
+                              <p className="text-sm text-zinc-300 leading-relaxed bg-black/30 p-4 rounded-2xl border border-white/5 max-w-3xl">
+                                {wl.description}
+                              </p>
+                            )}
+                            
+                            <p className="text-[10px] text-zinc-500 font-mono font-semibold uppercase">
+                              Created on {new Date(wl.createdAt).toLocaleDateString()} • {wl.movieIds.length} {wl.movieIds.length === 1 ? 'Title' : 'Titles'}
+                            </p>
+                          </div>
+
+                          {/* Titles list */}
+                          {wl.movieIds.length === 0 ? (
+                            <div className="text-center py-20 border border-dashed border-white/5 rounded-[2rem] text-zinc-500 italic text-sm bg-[#111111]/40">
+                              This playlist is empty. View movies or TV shows and use the details sidebar to stack items here!
+                            </div>
+                          ) : selectedCustomWlMovies.length === 0 ? (
+                            <div className="text-center py-12 text-zinc-500 animate-pulse">
+                              Resolving cinematic titles in custom checklist...
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                              {selectedCustomWlMovies.map(movie => (
+                                <div key={movie.id} className="relative group">
+                                  <MovieShowcaseCard
+                                    movie={movie}
+                                    onClick={() => handleMovieClick(movie.id, !!movie.isTvShow)}
+                                    onQuickWatchlist={(e) => handleQuickWatchlist(e, movie)}
+                                    onQuickRate={(e, score) => handleQuickRate(e, movie.id, score)}
+                                    currentUserId={currentUser.id}
+                                  />
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      await removeMovieFromCustomWatchlist(wl.id, movie.id);
+                                      triggerToast(`Removed "${movie.title}" from watchlist`);
+                                      setCustomWatchlists(getCustomWatchlists());
+                                    }}
+                                    className="absolute bottom-4 right-4 p-2 bg-red-600/90 hover:bg-red-600 text-white rounded-xl shadow-lg cursor-pointer text-xs font-mono font-bold flex items-center space-x-1 border border-red-500/30 hover:scale-105 active:scale-95 transition-all opacity-0 group-hover:opacity-100 duration-300"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                    <span>Remove</span>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
             )}
 

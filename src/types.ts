@@ -11,6 +11,8 @@ export interface User {
   followersCount: number;
   followingCount: number;
   isAdmin: boolean;
+  xp?: number;
+  level?: number;
 }
 
 export interface CastMember {
@@ -75,6 +77,13 @@ export interface Review {
   replies: Reply[];
   isReported: boolean;
   createdAt: string;
+  reactions?: {
+    helpful?: string[];
+    lovedIt?: string[];
+    greatAnalysis?: string[];
+    funny?: string[];
+    mindBlown?: string[];
+  };
 }
 
 export interface Reply {
@@ -84,6 +93,7 @@ export interface Reply {
   userAvatar: string;
   body: string;
   createdAt: string;
+  isSpoiler?: boolean;
 }
 
 export interface Rating {
@@ -116,17 +126,18 @@ export interface Report {
   id: string;
   reporterId: string;
   reporterUsername: string;
-  targetId: string; // review ID
-  targetType: 'review';
+  targetId: string; // review ID, post ID, etc.
+  targetType: 'review' | 'post' | 'comment';
   reason: string;
   createdAt: string;
   resolved: boolean;
+  communityId?: string; // Optional context for community posts
 }
 
 export interface Notification {
   id: string;
   userId: string; // recipient
-  type: 'follow' | 'like' | 'reply' | 'release' | 'news';
+  type: 'follow' | 'like' | 'reply' | 'release' | 'news' | 'reaction' | 'community_post' | 'community_comment' | 'xp' | 'level';
   senderName: string;
   senderAvatar: string;
   content: string;
@@ -142,3 +153,59 @@ export interface Announcement {
   createdAt: string;
   badge?: string;
 }
+
+export interface CommunityComment {
+  id: string;
+  authorId: string;
+  authorUsername: string;
+  authorAvatar: string;
+  body: string;
+  isSpoiler?: boolean;
+  isReported?: boolean;
+  createdAt: string;
+}
+
+export interface CommunityPost {
+  id: string;
+  communityId: string;
+  authorId: string;
+  authorUsername: string;
+  authorAvatar: string;
+  body: string;
+  likes: number;
+  likedBy: string[]; // user IDs
+  commentsCount: number;
+  comments?: CommunityComment[];
+  isSpoiler?: boolean;
+  isReported?: boolean;
+  isPoll?: boolean;
+  pollQuestion?: string;
+  pollOptions?: {
+    text: string;
+    votes: number;
+    votedBy: string[]; // user IDs
+  }[];
+  createdAt: string;
+}
+
+export interface Community {
+  id: string;
+  name: string;
+  tagline: string;
+  memberCount: number;
+  joinedBy: string[]; // user IDs
+  banner: string;
+  icon?: string;
+}
+
+export interface CustomWatchlist {
+  id: string;
+  userId: string;
+  name: string;
+  description: string;
+  isPrivate: boolean;
+  movieIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+

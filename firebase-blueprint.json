@@ -74,6 +74,22 @@
       },
       "required": ["id", "userId", "movieId", "movieTitle", "status"]
     },
+    "CustomWatchlist": {
+      "title": "CustomWatchlist",
+      "description": "A custom user-defined watchlist that can be public or private.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "isPrivate": { "type": "boolean" },
+        "movieIds": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "name", "isPrivate", "movieIds"]
+    },
     "Follow": {
       "title": "Follow",
       "description": "Follow relationship between two users.",
@@ -149,6 +165,10 @@
     "watchlist/{watchlistId}": {
       "schema": "WatchlistItem",
       "description": "Watchlists matching users with tracked movies."
+    },
+    "custom_watchlists/{watchlistId}": {
+      "schema": "CustomWatchlist",
+      "description": "User-defined custom watchlists."
     },
     "follows/{followId}": {
       "schema": "Follow",

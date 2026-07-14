@@ -34,6 +34,7 @@ import {
 import { User as UserType, Review, WatchlistItem, Movie } from '../types';
 import MovieDNAWidget from './MovieDNAWidget';
 import YearlyWrappedWidget from './YearlyWrappedWidget';
+import { getMovieDetails } from '../lib/tmdb';
 
 interface ProfileTabProps {
   onLogout: () => void;
@@ -91,6 +92,40 @@ export default function ProfileTab({ onLogout, onMovieClick, allMovies }: Profil
   useEffect(() => {
     loadProfileData();
   }, []);
+
+  const [resolvedWatchlistMovies, setResolvedWatchlistMovies] = useState<Movie[]>([]);
+  const [isResolvingMovies, setIsResolvingMovies] = useState(false);
+
+  useEffect(() => {
+    const resolveMovies = async () => {
+      if (watchlist.length === 0) {
+        setResolvedWatchlistMovies([]);
+        return;
+      }
+      setIsResolvingMovies(true);
+      try {
+        const resolved = await Promise.all(
+          watchlist.map(async (item) => {
+            const existing = allMovies.find(m => m.id === item.movieId);
+            if (existing) return existing;
+            try {
+              const details = await getMovieDetails(item.movieId, item.isTvShow, 'US');
+              return details;
+            } catch (err) {
+              console.error("Failed to load movie details for " + item.movieId, err);
+              return null;
+            }
+          })
+        );
+        setResolvedWatchlistMovies(resolved.filter((m): m is Movie => m !== null));
+      } catch (err) {
+        console.error("Error resolving watchlist movies", err);
+      } finally {
+        setIsResolvingMovies(false);
+      }
+    };
+    resolveMovies();
+  }, [watchlist, allMovies]);
 
   if (!user) return null;
 
@@ -380,27 +415,36 @@ export default function ProfileTab({ onLogout, onMovieClick, allMovies }: Profil
           {/* Movie DNA & Wrapped Sub-Tab */}
           {activeSubTab === 'dna' && (
             <div className="space-y-8 animate-fadeIn">
-              <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
-                <h3 className="text-xl font-black text-white tracking-tight flex items-center space-x-2.5 uppercase font-sans">
-                  <Award className="w-5.5 h-5.5 text-[#F5C518]" />
-                  <span>Your Cinematic DNA Spec</span>
-                </h3>
-                <p className="text-xs text-zinc-400 font-medium">
-                  Calculated automatically from your ratings, genres, and watch history.
-                </p>
-                <MovieDNAWidget watchlist={watchlist} allMovies={allMovies} userFavoriteGenres={favGenres} />
-              </div>
+              {isResolvingMovies && resolvedWatchlistMovies.length === 0 ? (
+                <div className="text-center py-20 border border-dashed border-white/5 rounded-[2rem] text-zinc-500 animate-pulse text-sm bg-[#111111]/40 flex flex-col items-center justify-center space-y-3">
+                  <div className="w-8 h-8 border-4 border-[#F5C518] border-t-transparent rounded-full animate-spin"></div>
+                  <span>Resolving your real-time movie history and statistics...</span>
+                </div>
+              ) : (
+                <>
+                  <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
+                    <h3 className="text-xl font-black text-white tracking-tight flex items-center space-x-2.5 uppercase font-sans">
+                      <Award className="w-5.5 h-5.5 text-[#F5C518]" />
+                      <span>Your Cinematic DNA Spec</span>
+                    </h3>
+                    <p className="text-xs text-zinc-400 font-medium">
+                      Calculated automatically from your ratings, genres, and watch history.
+                    </p>
+                    <MovieDNAWidget watchlist={watchlist} allMovies={resolvedWatchlistMovies} userFavoriteGenres={favGenres} />
+                  </div>
 
-              <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
-                <h3 className="text-xl font-black text-white tracking-tight flex items-center space-x-2.5 uppercase font-sans">
-                  <Sparkles className="w-5.5 h-5.5 text-[#F5C518]" />
-                  <span>Annual Movie Wrapped</span>
-                </h3>
-                <p className="text-xs text-zinc-400 font-medium">
-                  Your personalized summary of cinematic milestones this year.
-                </p>
-                <YearlyWrappedWidget watchlist={watchlist} allMovies={allMovies} userDisplayName={user.displayName} />
-              </div>
+                  <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
+                    <h3 className="text-xl font-black text-white tracking-tight flex items-center space-x-2.5 uppercase font-sans">
+                      <Sparkles className="w-5.5 h-5.5 text-[#F5C518]" />
+                      <span>Annual Movie Wrapped</span>
+                    </h3>
+                    <p className="text-xs text-zinc-400 font-medium">
+                      Your personalized summary of cinematic milestones this year.
+                    </p>
+                    <YearlyWrappedWidget watchlist={watchlist} allMovies={resolvedWatchlistMovies} userDisplayName={user.displayName} />
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -408,32 +452,6 @@ export default function ProfileTab({ onLogout, onMovieClick, allMovies }: Profil
           {activeSubTab === 'settings' && (
             <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-6 animate-fadeIn text-sm text-zinc-300 shadow-xl">
               
-              {/* Credentials TMDB Sync block */}
-              <div className="space-y-4 border-b border-white/5 pb-6">
-                <h3 className="font-black text-white text-base flex items-center space-x-2 uppercase font-sans">
-                  <Key className="w-4.5 h-4.5 text-[#F5C518]" />
-                  <span>TMDb API Sync Credentials</span>
-                </h3>
-                <p className="text-xs text-zinc-400 leading-relaxed font-medium">
-                  Supply your personal TMDb credentials to activate real-time infinite searches, trailer retrievals, and casting specs directly from the largest online media registry.
-                </p>
-                <div className="flex gap-3">
-                  <input
-                    type="password"
-                    value={tmdbKey}
-                    onChange={e => setTmdbKey(e.target.value)}
-                    placeholder="Input TMDb Read Token or API Key..."
-                    className="flex-1 bg-[#1A1A1A] border border-white/5 rounded-xl px-4 py-3.5 text-xs text-white focus:border-[#F5C518] outline-none font-mono"
-                  />
-                  <button
-                    onClick={handleSaveTMDBKey}
-                    className="px-6 py-3.5 bg-[#F5C518] hover:bg-[#F5C518]/90 text-black font-black uppercase tracking-wider rounded-xl text-xs transition-all cursor-pointer shadow-lg shadow-[#F5C518]/10 hover:scale-105"
-                  >
-                    Save Key
-                  </button>
-                </div>
-              </div>
-
               {/* Preferences: Dark mode, Language, Privacy */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 border-b border-white/5 pb-6">
                 <div className="space-y-4">

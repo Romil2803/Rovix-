@@ -454,3 +454,37 @@ export async function getRecommendations(id: string, isTvShow: boolean = false):
     return MOCK_MOVIES.filter(m => m.id !== id).slice(0, 4);
   }
 }
+
+const REGIONAL_PROVIDER_FALLBACKS: Record<string, string[]> = {
+  US: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Max', 'Hulu', 'Crunchyroll', 'Peacock', 'Paramount+', 'YouTube', 'Google Play Movies'],
+  IN: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'JioCinema', 'Hotstar', 'Zee5', 'SonyLIV', 'YouTube', 'Google Play Movies'],
+  GB: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Now TV', 'Discovery+', 'YouTube', 'Google Play Movies'],
+  CA: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Crave', 'Paramount+', 'YouTube', 'Google Play Movies'],
+  AU: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Stan', 'Binge', 'Paramount+', 'YouTube', 'Google Play Movies'],
+  DE: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Wow', 'Paramount+', 'YouTube', 'Google Play Movies'],
+  FR: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Canal+', 'Paramount+', 'YouTube', 'Google Play Movies'],
+  JP: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'U-NEXT', 'Hulu Japan', 'YouTube', 'Google Play Movies'],
+  KR: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Wavve', 'Watcha', 'YouTube', 'Google Play Movies'],
+  BR: ['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Globoplay', 'Claro Video', 'YouTube', 'Google Play Movies']
+};
+
+export async function getWatchProvidersForRegion(countryCode: string): Promise<string[]> {
+  const normCountry = (countryCode || 'US').toUpperCase();
+  const fallback = REGIONAL_PROVIDER_FALLBACKS[normCountry] || REGIONAL_PROVIDER_FALLBACKS['US'];
+  try {
+    const data = await fetchFromTmdb('/watch/providers/movie', { watch_region: normCountry, language: 'en-US' });
+    if (data && data.results && data.results.length > 0) {
+      // Sort by display_priority asc to put more popular ones first
+      const sorted = [...data.results].sort((a: any, b: any) => (a.display_priority || 0) - (b.display_priority || 0));
+      const fetched = Array.from(new Set(sorted.slice(0, 45).map((p: any) => p.provider_name))) as string[];
+      if (fetched.length >= 5) {
+        return fetched;
+      } else if (fetched.length > 0) {
+        return Array.from(new Set([...fetched, ...fallback]));
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch watch providers for region', err);
+  }
+  return fallback;
+}

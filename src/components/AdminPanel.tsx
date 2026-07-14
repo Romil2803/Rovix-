@@ -9,7 +9,9 @@ import {
   resolveReport,
   getAnnouncements,
   addAnnouncement,
-  deleteReview
+  deleteReview,
+  updateProfile,
+  deleteAccount
 } from '../db/storage';
 import { Movie, Review, Report, Announcement, User } from '../types';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
@@ -128,23 +130,17 @@ export default function AdminPanel({ onMovieClick, usersList, onUpdateUsersList 
     loadData();
   };
 
-  const handleMakeAdmin = (userId: string) => {
-    const rawUsers = localStorage.getItem('rovix_users');
-    if (rawUsers) {
-      const parsed: User[] = JSON.parse(rawUsers);
-      const updated = parsed.map(u => u.id === userId ? { ...u, isAdmin: !u.isAdmin } : u);
-      localStorage.setItem('rovix_users', JSON.stringify(updated));
+  const handleMakeAdmin = async (userId: string) => {
+    const user = usersList.find(u => u.id === userId);
+    if (user) {
+      await updateProfile(userId, { isAdmin: !user.isAdmin });
       onUpdateUsersList();
     }
   };
 
-  const handleDeleteUser = (userId: string) => {
-    const rawUsers = localStorage.getItem('rovix_users');
-    if (rawUsers) {
-      const parsed: User[] = JSON.parse(rawUsers).filter((u: User) => u.id !== userId);
-      localStorage.setItem('rovix_users', JSON.stringify(parsed));
-      onUpdateUsersList();
-    }
+  const handleDeleteUser = async (userId: string) => {
+    await deleteAccount(userId);
+    onUpdateUsersList();
   };
 
   // Recharts Simulated growth data
