@@ -40,6 +40,9 @@ export interface Movie {
   trailerUrl: string;
   gallery: string[];
   streamingPlatforms: string[];
+  rawProviders?: any;
+  imdbId?: string;
+  netflixId?: string;
   rating: number; // TMDB average or overall average
   communityRating: number; // Rovix internal average
   totalRatingsCount: number;

@@ -21,7 +21,13 @@ import {
   ThumbsUp,
   UserCheck,
   UserPlus,
-  Users
+  Users,
+  Globe,
+  Calendar,
+  Sparkles,
+  Tv,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import {
   initDatabase,
@@ -45,7 +51,7 @@ import {
 import { Movie, Review, User as UserType, Notification, Announcement, WatchlistStatus } from './types';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './lib/firebase';
-import { getTrendingMovies, getTrendingTVShows } from './lib/tmdb';
+import { getTrendingMovies, getTrendingTVShows, searchTMDB, getPopularMovies, getPopularTVShows, getWatchProviders, getLocalizedDiscover, discoverMedia, GENRE_MAP, getTopRated } from './lib/tmdb';
 
 // Import Modular tabs/panels
 import BottomNavigation from './components/BottomNavigation';
@@ -53,6 +59,56 @@ import MovieDetails from './components/MovieDetails';
 import ProfileTab from './components/ProfileTab';
 import AdminPanel from './components/AdminPanel';
 import AuthScreen from './components/AuthScreen';
+
+const ALL_YEARS = Array.from({ length: 2026 - 1950 + 1 }, (_, i) => String(2026 - i));
+const ALL_LANGUAGES = [
+  { code: 'EN', name: 'English' },
+  { code: 'ES', name: 'Spanish' },
+  { code: 'FR', name: 'French' },
+  { code: 'JA', name: 'Japanese' },
+  { code: 'KO', name: 'Korean' },
+  { code: 'ZH', name: 'Chinese' },
+  { code: 'HI', name: 'Hindi' },
+  { code: 'DE', name: 'German' },
+  { code: 'IT', name: 'Italian' },
+  { code: 'PT', name: 'Portuguese' },
+  { code: 'RU', name: 'Russian' },
+  { code: 'AR', name: 'Arabic' },
+  { code: 'TR', name: 'Turkish' },
+  { code: 'NL', name: 'Dutch' },
+  { code: 'SV', name: 'Swedish' },
+  { code: 'NO', name: 'Norwegian' },
+  { code: 'DA', name: 'Danish' },
+  { code: 'FI', name: 'Finnish' },
+  { code: 'PL', name: 'Polish' }
+];
+const COUNTRIES = [
+  { code: 'US', name: 'United States', flag: '🇺🇸' },
+  { code: 'IN', name: 'India', flag: '🇮🇳' },
+  { code: 'GB', name: 'United Kingdom', flag: '🇬🇧' },
+  { code: 'CA', name: 'Canada', flag: '🇨🇦' },
+  { code: 'AU', name: 'Australia', flag: '🇦🇺' },
+  { code: 'DE', name: 'Germany', flag: '🇩🇪' },
+  { code: 'FR', name: 'France', flag: '🇫🇷' },
+  { code: 'JP', name: 'Japan', flag: '🇯🇵' },
+  { code: 'KR', name: 'South Korea', flag: '🇰🇷' },
+  { code: 'BR', name: 'Brazil', flag: '🇧🇷' },
+  { code: 'ES', name: 'Spain', flag: '🇪🇸' },
+  { code: 'IT', name: 'Italy', flag: '🇮🇹' }
+];
+
+function getFlagEmoji(countryCode: string): string {
+  if (!countryCode || countryCode.length !== 2) return '🏳️';
+  const codePoints = countryCode
+    .toUpperCase()
+    .split('')
+    .map(char => 127397 + char.charCodeAt(0));
+  try {
+    return String.fromCodePoint(...codePoints);
+  } catch (e) {
+    return '🏳️';
+  }
+}
 
 export default function App() {
   const [currentUser, setLocalCurrentUser] = useState<UserType | null>(null);
@@ -76,11 +132,81 @@ export default function App() {
   const [searchYear, setSearchYear] = useState('');
   const [searchLanguage, setSearchLanguage] = useState('');
   const [searchPlatform, setSearchPlatform] = useState('');
+  const [searchCountry, setSearchCountry] = useState('US');
+  const [dynamicCountries, setDynamicCountries] = useState(COUNTRIES);
+
+  // Auto-detect user's country/region via IP Geolocation
+  useEffect(() => {
+    const detectCountry = async () => {
+      try {
+        const response = await fetch('https://ipapi.co/json/');
+        if (response.ok) {
+          const data = await response.json();
+          const detectedCode = data.country_code;
+          const detectedName = data.country_name;
+          if (detectedCode && typeof detectedCode === 'string') {
+            const upperCode = detectedCode.toUpperCase();
+            setSearchCountry(upperCode);
+            setHomeCountry(upperCode);
+            localStorage.setItem('rovix_home_country', upperCode);
+            
+            // Add dynamically if not in original COUNTRIES
+            setDynamicCountries(prev => {
+              if (prev.some(c => c.code === upperCode)) return prev;
+              const flag = getFlagEmoji(upperCode);
+              return [...prev, { code: upperCode, name: detectedName || upperCode, flag }];
+            });
+          }
+        }
+      } catch (e) {
+        // Fallback using browser metadata (timezone and navigator locale)
+        try {
+          const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          let guessedCode = 'US';
+          if (timezone.includes('Calcutta') || timezone.includes('Asia/Kolkata') || timezone.includes('Delhi') || timezone.includes('Mumbai')) {
+            guessedCode = 'IN';
+          } else if (timezone.includes('London') || timezone.includes('Europe/London')) {
+            guessedCode = 'GB';
+          } else if (timezone.includes('Sydney') || timezone.includes('Melbourne') || timezone.includes('Australia')) {
+            guessedCode = 'AU';
+          } else if (timezone.includes('Toronto') || timezone.includes('Vancouver') || timezone.includes('Canada')) {
+            guessedCode = 'CA';
+          } else {
+            const lang = navigator.language;
+            if (lang && lang.includes('-')) {
+              guessedCode = lang.split('-')[1].toUpperCase();
+            }
+          }
+          if (guessedCode) {
+            setSearchCountry(guessedCode);
+            setHomeCountry(guessedCode);
+            localStorage.setItem('rovix_home_country', guessedCode);
+          }
+        } catch (err) {
+          console.warn('Failed to detect fallback region', err);
+        }
+      }
+    };
+    detectCountry();
+  }, []);
+
   const [searchSort, setSearchSort] = useState('popularity');
+  const [searchPageMovies, setSearchPageMovies] = useState<Movie[]>([]);
+  const [searchPage, setSearchPage] = useState<number>(1);
+  const [isSearchingTmdb, setIsSearchingTmdb] = useState<boolean>(false);
+  const [hasMoreSearch, setHasMoreSearch] = useState<boolean>(true);
 
   // Watchlist tab states
   const [watchlistFilter, setWatchlistFilter] = useState<WatchlistStatus>('Plan to Watch');
   const [watchlistQuery, setWatchlistQuery] = useState('');
+
+  // Regionalized Home tab states
+  const [homeCountry, setHomeCountry] = useState<string>(() => localStorage.getItem('rovix_home_country') || 'IN');
+  const [homeWorldMovies, setHomeWorldMovies] = useState<Movie[]>([]);
+  const [homeIndianMovies, setHomeIndianMovies] = useState<Movie[]>([]);
+  const [homeSpotlightMovies, setHomeSpotlightMovies] = useState<Movie[]>([]);
+  const [homeTVShows, setHomeTVShows] = useState<Movie[]>([]);
+  const [loadingHomeContent, setLoadingHomeContent] = useState<boolean>(false);
 
   // Alerts
   const [toast, setToast] = useState<string | null>(null);
@@ -109,21 +235,60 @@ export default function App() {
   }, []);
 
   const loadAllMedia = async () => {
-    try {
-      const trendingM = await getTrendingMovies();
-      const trendingT = await getTrendingTVShows();
-      if (trendingM.length > 0 || trendingT.length > 0) {
-        setAllMovies([...trendingM, ...trendingT]);
-      } else {
-        setAllMovies(getMovies());
-      }
-    } catch (e) {
-      setAllMovies(getMovies());
-    }
     setAllReviews(getReviews());
     setAnnouncements(getAnnouncements());
     setUsersList(getUsersList());
   };
+
+  const loadHomeContent = async () => {
+    setLoadingHomeContent(true);
+    try {
+      // 1. Fetch Hollywood / World blockbusters
+      const worldMovies = await getLocalizedDiscover('movie', 'US', 1);
+      // 2. Fetch Indian Cinema
+      const indianMovies = await getLocalizedDiscover('movie', 'IN', 1);
+      // 3. Fetch Featured Spotlights / Top Rated masterpieces
+      const spotlightMovies = await getTopRated('movie');
+      // 4. Fetch TV Shows
+      const tvShows = await getTrendingTVShows('week', 1);
+
+      // Filter out any daily soap TV show (genre "Soap" or name/overview containing soap indicators)
+      const filteredTVShows = tvShows.filter(show => {
+        const isSoap = show.genres.some(g => {
+          const lower = g.toLowerCase();
+          return lower === 'soap' || lower.includes('soap') || lower.includes('telenovela');
+        });
+        return !isSoap;
+      });
+
+      setHomeWorldMovies(worldMovies.slice(0, 20));
+      setHomeIndianMovies(indianMovies.slice(0, 20));
+      setHomeSpotlightMovies(spotlightMovies.slice(0, 20));
+      setHomeTVShows(filteredTVShows.slice(0, 20));
+    } catch (err) {
+      console.warn('Failed to load localized home content', err);
+      const fallbackMovies = getMovies().filter(m => !m.isTvShow);
+      const fallbackTV = getMovies().filter(m => m.isTvShow);
+      setHomeWorldMovies(fallbackMovies);
+      setHomeIndianMovies(fallbackMovies);
+      setHomeSpotlightMovies(fallbackMovies);
+      setHomeTVShows(fallbackTV);
+    } finally {
+      setLoadingHomeContent(false);
+    }
+  };
+
+  useEffect(() => {
+    loadHomeContent();
+  }, []);
+
+  useEffect(() => {
+    const combined = [...homeWorldMovies, ...homeIndianMovies, ...homeSpotlightMovies, ...homeTVShows];
+    if (combined.length > 0) {
+      const unique = Array.from(new Map(combined.map(m => [m.id, m])).values());
+      setAllMovies(unique);
+    }
+  }, [homeWorldMovies, homeIndianMovies, homeSpotlightMovies, homeTVShows]);
 
   const handleAuthSuccess = (u: UserType) => {
     setCurrentUser(u);
@@ -203,24 +368,189 @@ export default function App() {
     }
   };
 
-  if (!currentUser) {
-    return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
-  }
+  // Debounce state for searchQuery
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 500);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  const getGenreIdByName = (name: string): number | null => {
+    if (!name) return null;
+    const entry = Object.entries(GENRE_MAP).find(([_, val]) => val.toLowerCase() === name.toLowerCase());
+    return entry ? Number(entry[0]) : null;
+  };
+
+  const matchPlatform = (moviePlatforms: string[], searchPlat: string): boolean => {
+    if (!searchPlat) return true;
+    const searchLower = searchPlat.toLowerCase();
+    return moviePlatforms.some(plat => {
+      const platLower = plat.toLowerCase();
+      if (searchLower === 'netflix') return platLower.includes('netflix');
+      if (searchLower === 'prime video') return platLower.includes('prime video') || platLower.includes('amazon');
+      if (searchLower === 'disney+') return platLower.includes('disney');
+      if (searchLower === 'apple tv+') return platLower.includes('apple');
+      if (searchLower === 'max') return platLower.includes('max') || platLower.includes('hbo');
+      if (searchLower === 'hulu') return platLower.includes('hulu');
+      if (searchLower === 'paramount+') return platLower.includes('paramount');
+      if (searchLower === 'peacock') return platLower.includes('peacock');
+      if (searchLower === 'crunchyroll') return platLower.includes('crunchyroll');
+      if (searchLower === 'jiocinema') return platLower.includes('jio');
+      if (searchLower === 'hotstar') return platLower.includes('hotstar') || platLower.includes('disney');
+      if (searchLower === 'zee5') return platLower.includes('zee');
+      if (searchLower === 'sonyliv') return platLower.includes('sony') || platLower.includes('liv');
+      return platLower.includes(searchLower) || searchLower.includes(platLower);
+    });
+  };
+
+  // Fetch search page data from TMDB
+  const fetchSearchPageData = async (query: string, page: number, isNewSearch: boolean) => {
+    setIsSearchingTmdb(true);
+    try {
+      let results: Movie[] = [];
+      if (query.trim() !== '') {
+        const rawResults = await searchTMDB(query, page);
+        // Filter out people (cast/crew matching) and map as Movie array
+        results = rawResults.filter(item => item.type !== 'person') as Movie[];
+      } else if (searchGenre || searchYear || searchLanguage || searchPlatform || searchCountry !== 'US') {
+        const genreId = getGenreIdByName(searchGenre);
+        const params: Record<string, string> = {
+          page: String(page),
+          sort_by: searchSort === 'rating' ? 'vote_average.desc' : (searchSort === 'newest' ? 'primary_release_date.desc' : 'popularity.desc'),
+        };
+        if (genreId) params.with_genres = String(genreId);
+        if (searchYear) params.primary_release_year = searchYear;
+        if (searchLanguage) params.with_original_language = searchLanguage.toLowerCase();
+        
+        if (searchCountry) {
+          params.watch_region = searchCountry;
+        }
+
+        const discoveredMovies = await discoverMedia('movie', params);
+        const discoveredTV = await discoverMedia('tv', params);
+
+        const merged: Movie[] = [];
+        const maxLen = Math.max(discoveredMovies.length, discoveredTV.length);
+        for (let i = 0; i < maxLen; i++) {
+          if (i < discoveredMovies.length) merged.push(discoveredMovies[i]);
+          if (i < discoveredTV.length) merged.push(discoveredTV[i]);
+        }
+        results = merged;
+      } else {
+        // If query is empty, load trending movies and TV shows for that page!
+        const trendingMovies = await getTrendingMovies('day', page);
+        const trendingTV = await getTrendingTVShows('day', page);
+        
+        // Merge them nicely
+        const merged: Movie[] = [];
+        const maxLen = Math.max(trendingMovies.length, trendingTV.length);
+        for (let i = 0; i < maxLen; i++) {
+          if (i < trendingMovies.length) merged.push(trendingMovies[i]);
+          if (i < trendingTV.length) merged.push(trendingTV[i]);
+        }
+        results = merged;
+      }
+
+      if (results.length === 0) {
+        setHasMoreSearch(false);
+      } else {
+        // Fetch watch providers in parallel for all results
+        let finalizedResults: Movie[] = results;
+        try {
+          finalizedResults = await Promise.all(results.map(async (m) => {
+            const providers = await getWatchProviders(m.id, !!m.isTvShow);
+            if (providers) {
+              return {
+                ...m,
+                rawProviders: providers
+              };
+            }
+            return m;
+          }));
+        } catch (e) {
+          console.warn('Failed to fetch watch providers for results page', e);
+        }
+
+        setSearchPageMovies(prev => {
+          if (isNewSearch) {
+            return finalizedResults;
+          } else {
+            // Filter duplicates
+            const existingIds = new Set(prev.map(m => m.id));
+            const uniqueNew = finalizedResults.filter(m => !existingIds.has(m.id));
+            return [...prev, ...uniqueNew];
+          }
+        });
+        setHasMoreSearch(results.length >= 10);
+      }
+    } catch (err) {
+      console.error('Error fetching TMDB search data', err);
+    } finally {
+      setIsSearchingTmdb(false);
+    }
+  };
+
+  // Effect to reset page and fetch first page on query/activeTab/filters changes
+  useEffect(() => {
+    if (activeTab === 'search') {
+      setSearchPage(1);
+      setHasMoreSearch(true);
+      fetchSearchPageData(debouncedQuery, 1, true);
+    }
+  }, [debouncedQuery, activeTab, searchGenre, searchYear, searchLanguage, searchPlatform, searchCountry, searchSort]);
+
+  // Effect to fetch subsequent pages when searchPage increments
+  useEffect(() => {
+    if (activeTab === 'search' && searchPage > 1) {
+      fetchSearchPageData(debouncedQuery, searchPage, false);
+    }
+  }, [searchPage]);
 
   // Filter Search results as user types
-  const filteredSearchMovies = allMovies.filter(m => {
-    const matchesQuery = m.title.toLowerCase().includes(searchQuery.toLowerCase()) || m.overview.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesGenre = !searchGenre || m.genres.includes(searchGenre);
-    const matchesYear = !searchYear || m.releaseDate.startsWith(searchYear);
+  const filteredSearchMovies = searchPageMovies.map(m => {
+    if (m.rawProviders) {
+      const localeData = m.rawProviders[searchCountry];
+      const list: string[] = [];
+      if (localeData) {
+        if (localeData.flatrate) {
+          localeData.flatrate.forEach((p: any) => list.push(p.provider_name));
+        }
+        if (localeData.rent) {
+          localeData.rent.forEach((p: any) => list.push(p.provider_name));
+        }
+        if (localeData.buy) {
+          localeData.buy.forEach((p: any) => list.push(p.provider_name));
+        }
+      }
+      return {
+        ...m,
+        streamingPlatforms: Array.from(new Set(list))
+      };
+    }
+    return m;
+  }).filter(m => {
+    const matchesGenre = !searchGenre || m.genres.some(g => {
+      const normalizedGenre = g.toLowerCase();
+      const normalizedSearch = searchGenre.toLowerCase();
+      return normalizedGenre.includes(normalizedSearch) || normalizedSearch.includes(normalizedGenre);
+    });
+    const matchesYear = !searchYear || (m.releaseDate && m.releaseDate.includes(searchYear));
     const matchesLang = !searchLanguage || m.language.toUpperCase() === searchLanguage.toUpperCase();
-    const matchesPlatform = !searchPlatform || m.streamingPlatforms.includes(searchPlatform);
-    return matchesQuery && matchesGenre && matchesYear && matchesLang && matchesPlatform;
+    const matchesPlatform = !searchPlatform || matchPlatform(m.streamingPlatforms, searchPlatform);
+    return matchesGenre && matchesYear && matchesLang && matchesPlatform;
   }).sort((a, b) => {
     if (searchSort === 'rating') return b.communityRating - a.communityRating;
     if (searchSort === 'newest') return b.releaseDate.localeCompare(a.releaseDate);
     if (searchSort === 'oldest') return a.releaseDate.localeCompare(b.releaseDate);
     return b.totalRatingsCount - a.totalRatingsCount; // default popularity
   });
+
+  if (!currentUser) {
+    return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
+  }
 
   // Watchlist filter lists
   const myWatchlistItems = getWatchlist(currentUser.id).filter(w => {
@@ -264,95 +594,139 @@ export default function App() {
         {/* 1. HOME TAB VIEW */}
         {activeTab === 'home' && (
           <div className="space-y-12 animate-fadeIn pt-20 md:pt-28">
-            
-            {/* Immersive Hero cinematic spotlight */}
-            <div className="relative h-[380px] md:h-[580px] max-w-7xl mx-auto rounded-[2.5rem] md:rounded-[3rem] overflow-hidden border border-white/5 shadow-2xl bg-zinc-950">
-              <div className="absolute inset-0 z-0">
-                <img
-                  src="https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1200&auto=format&fit=crop&q=80"
-                  alt="Spotlight"
-                  className="w-full h-full object-cover opacity-60 transition-transform duration-1000 ease-out hover:scale-105"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#090909] via-[#090909]/65 to-transparent" />
-              </div>
-
-              <div className="absolute bottom-10 left-6 md:left-14 max-w-2xl space-y-4 z-10">
-                <div className="flex gap-2">
-                  <span className="px-4 py-1.5 bg-[#F5C518] text-black text-[9px] font-black rounded-full uppercase tracking-widest font-mono shadow-lg shadow-[#F5C518]/20">
-                    Trending This Week
-                  </span>
-                  <span className="px-4 py-1.5 bg-white/5 backdrop-blur-xl text-white text-[9px] font-black rounded-full uppercase tracking-widest font-mono border border-white/10">
-                    Sci-Fi / Adventure
-                  </span>
-                </div>
-                <h1 className="text-4xl md:text-7xl font-sans font-black tracking-tighter text-white uppercase leading-none">Dune: Part Two</h1>
-                <p className="text-zinc-300 text-xs md:text-sm leading-relaxed line-clamp-3 font-medium">
-                  Paul Atreides unites with Chani and the Fremen while on a warpath of revenge against the conspirators who destroyed his family. Experience Denis Villeneuve's masterpiece.
-                </p>
-                <div className="flex gap-3 pt-3">
-                  <button
-                    onClick={() => handleMovieClick('m_1', false)}
-                    className="px-8 py-3.5 bg-white text-black hover:bg-[#F5C518] font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase flex items-center space-x-1.5 shadow-lg shadow-white/5 cursor-pointer hover:scale-105"
-                  >
-                    <span>View Specifications</span>
-                    <ArrowUpRight className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      const dune = allMovies.find(m => m.id === 'm_1');
-                      if (dune) handleQuickWatchlist(e, dune);
-                    }}
-                    className="px-8 py-3.5 bg-white/5 backdrop-blur-xl border border-white/10 text-white hover:bg-white/15 font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase cursor-pointer hover:scale-105"
-                  >
-                    + Quick Add
-                  </button>
-                </div>
-              </div>
-            </div>
 
             {/* General Carousels Container */}
-            <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-10">
+            <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-12">
               
-              {/* Trending Movies */}
-              <div className="space-y-6">
-                <h3 className="text-2xl font-sans font-black tracking-tight text-white flex items-center space-x-2.5 uppercase">
-                  <Flame className="w-5.5 h-5.5 text-[#F5C518]" />
-                  <span>Trending Movies This Week</span>
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
-                  {allMovies.filter(m => !m.isTvShow).slice(0, 5).map(movie => (
-                    <MovieShowcaseCard
-                      key={movie.id}
-                      movie={movie}
-                      onClick={() => handleMovieClick(movie.id, false)}
-                      onQuickWatchlist={(e) => handleQuickWatchlist(e, movie)}
-                      onQuickRate={(e, score) => handleQuickRate(e, movie.id, score)}
-                      currentUserId={currentUser.id}
-                    />
+              {loadingHomeContent ? (
+                /* Dynamic Skeleton Loading State */
+                <div className="space-y-10 animate-pulse">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="space-y-4">
+                      <div className="h-8 bg-[#181818] rounded-xl w-64" />
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                        {[1, 2, 3, 4, 5].map(j => (
+                          <div key={j} className="h-[300px] bg-[#111111] rounded-[2rem] border border-white/5" />
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
-              </div>
+              ) : (
+                <>
+                  {/* Immersive Hero cinematic spotlight */}
+                  {(() => {
+                    const heroMovie = homeSpotlightMovies[0] || {
+                      id: 'm_1',
+                      title: 'Dune: Part Two',
+                      overview: "Paul Atreides unites with Chani and the Fremen while on a warpath of revenge against the conspirators who destroyed his family. Experience Denis Villeneuve's masterpiece.",
+                      backdropPath: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1200&auto=format&fit=crop&q=80',
+                      genres: ['Sci-Fi', 'Adventure'],
+                      isTvShow: false,
+                      releaseDate: '2024-03-01'
+                    };
+                    return (
+                      <div className="relative h-[380px] md:h-[580px] max-w-7xl mx-auto rounded-[2.5rem] md:rounded-[3rem] overflow-hidden border border-white/5 shadow-2xl bg-zinc-950">
+                        <div className="absolute inset-0 z-0">
+                          <img
+                            src={heroMovie.backdropPath || "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1200&auto=format&fit=crop&q=80"}
+                            alt={heroMovie.title}
+                            className="w-full h-full object-cover opacity-60 transition-transform duration-1000 ease-out hover:scale-105"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-[#090909] via-[#090909]/65 to-transparent" />
+                        </div>
 
-              {/* Trending TV Shows */}
-              <div className="space-y-6">
-                <h3 className="text-2xl font-sans font-black tracking-tight text-white flex items-center space-x-2.5 uppercase">
-                  <Flame className="w-5.5 h-5.5 text-[#F5C518]" />
-                  <span>Trending TV Shows</span>
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
-                  {allMovies.filter(m => m.isTvShow).slice(0, 5).map(movie => (
-                    <MovieShowcaseCard
-                      key={movie.id}
-                      movie={movie}
-                      onClick={() => handleMovieClick(movie.id, true)}
-                      onQuickWatchlist={(e) => handleQuickWatchlist(e, movie)}
-                      onQuickRate={(e, score) => handleQuickRate(e, movie.id, score)}
+                        <div className="absolute bottom-10 left-6 md:left-14 max-w-2xl space-y-4 z-10">
+                          <div className="flex gap-2">
+                            <span className="px-4 py-1.5 bg-[#F5C518] text-black text-[9px] font-black rounded-full uppercase tracking-widest font-mono shadow-lg shadow-[#F5C518]/20">
+                              Featured Spotlight
+                            </span>
+                            <span className="px-4 py-1.5 bg-white/5 backdrop-blur-xl text-white text-[9px] font-black rounded-full uppercase tracking-widest font-mono border border-white/10">
+                              {heroMovie.genres && heroMovie.genres.length > 0 ? heroMovie.genres.slice(0, 2).join(' / ') : 'Movie Blockbuster'}
+                            </span>
+                          </div>
+                          <h1 className="text-4xl md:text-7xl font-sans font-black tracking-tighter text-white uppercase leading-none">
+                            {heroMovie.title}
+                          </h1>
+                          <p className="text-zinc-300 text-xs md:text-sm leading-relaxed line-clamp-3 font-medium">
+                            {heroMovie.overview}
+                          </p>
+                          <div className="flex gap-3 pt-3">
+                            <button
+                              onClick={() => handleMovieClick(heroMovie.id, !!heroMovie.isTvShow)}
+                              className="px-8 py-3.5 bg-white text-black hover:bg-[#F5C518] font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase flex items-center space-x-1.5 shadow-lg shadow-white/5 cursor-pointer hover:scale-105"
+                            >
+                              <span>View Specifications</span>
+                              <ArrowUpRight className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => handleQuickWatchlist(e, heroMovie)}
+                              className="px-8 py-3.5 bg-white/5 backdrop-blur-xl border border-white/10 text-white hover:bg-white/15 font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase cursor-pointer hover:scale-105"
+                            >
+                              + Quick Add
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* World & Hollywood Blockbusters Carousel */}
+                  {homeWorldMovies.length > 0 && (
+                    <div className="pt-6">
+                      <HorizontalCarousel
+                        title="World & Hollywood Blockbusters"
+                        icon={<Globe className="w-5.5 h-5.5 text-[#F5C518]" />}
+                        items={homeWorldMovies}
+                        onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
+                        onQuickWatchlist={handleQuickWatchlist}
+                        onQuickRate={handleQuickRate}
+                        currentUserId={currentUser.id}
+                      />
+                    </div>
+                  )}
+
+                  {/* Indian Cinema Carousel */}
+                  {homeIndianMovies.length > 0 && (
+                    <HorizontalCarousel
+                      title="Indian Cinema"
+                      icon={<Sparkles className="w-5.5 h-5.5 text-[#F5C518]" />}
+                      items={homeIndianMovies}
+                      onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
+                      onQuickWatchlist={handleQuickWatchlist}
+                      onQuickRate={handleQuickRate}
                       currentUserId={currentUser.id}
                     />
-                  ))}
-                </div>
-              </div>
+                  )}
+
+                  {/* Trending TV Shows Carousel */}
+                  {homeTVShows.length > 0 && (
+                    <HorizontalCarousel
+                      title="Trending TV Shows"
+                      icon={<Tv className="w-5.5 h-5.5 text-[#F5C518]" />}
+                      items={homeTVShows}
+                      onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
+                      onQuickWatchlist={handleQuickWatchlist}
+                      onQuickRate={handleQuickRate}
+                      currentUserId={currentUser.id}
+                    />
+                  )}
+
+                  {/* Top Rated Masterpieces Carousel */}
+                  {homeSpotlightMovies.length > 0 && (
+                    <HorizontalCarousel
+                      title="Critically Acclaimed Masterpieces"
+                      icon={<Flame className="w-5.5 h-5.5 text-[#F5C518]" />}
+                      items={homeSpotlightMovies}
+                      onItemClick={(movie) => handleMovieClick(movie.id, !!movie.isTvShow)}
+                      onQuickWatchlist={handleQuickWatchlist}
+                      onQuickRate={handleQuickRate}
+                      currentUserId={currentUser.id}
+                    />
+                  )}
+                </>
+              )}
 
               {/* Grid: Community Reviews + Friends Activity Panel */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -491,7 +865,7 @@ export default function App() {
               <div className="md:col-span-3 bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
                 <h3 className="font-black text-sm uppercase tracking-wider text-white">Filter by Streaming Provider</h3>
                 <div className="flex flex-wrap gap-3">
-                  {['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Max'].map(platform => (
+                  {['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Max', 'JioCinema', 'Hotstar', 'Zee5'].map(platform => (
                     <div
                       key={platform}
                       onClick={() => {
@@ -537,121 +911,200 @@ export default function App() {
             </div>
 
             {/* Filter Hub specification block */}
-            <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] grid grid-cols-2 md:grid-cols-5 gap-4 text-xs text-zinc-400 shadow-xl">
+            <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2.5rem] shadow-2xl relative overflow-hidden backdrop-blur-md">
+              <div className="absolute top-0 left-0 w-32 h-32 bg-[#F5C518]/5 rounded-full blur-3xl pointer-events-none" />
               
-              {/* Genres filter */}
-              <div className="space-y-2">
-                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Genre Spec</label>
-                <select
-                  value={searchGenre}
-                  onChange={e => setSearchGenre(e.target.value)}
-                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
-                >
-                  <option value="">All Genres</option>
-                  {['Action', 'Sci-Fi', 'Drama', 'Comedy', 'Thriller', 'Animation', 'Mystery', 'Romance', 'Horror'].map(g => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 bg-[#F5C518]/10 text-[#F5C518] rounded-xl">
+                    <Compass className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm text-white uppercase tracking-wider">Dynamic Specification Filters</h3>
+                    <p className="text-[10px] text-zinc-500 font-mono">Real-time localized availability routing</p>
+                  </div>
+                </div>
+                
+                {/* Reset button inside header */}
+                {(searchGenre || searchYear || searchLanguage || searchPlatform || searchCountry !== 'US') && (
+                  <button
+                    onClick={() => {
+                      setSearchGenre('');
+                      setSearchYear('');
+                      setSearchLanguage('');
+                      setSearchPlatform('');
+                      setSearchQuery('');
+                      setSearchCountry('US');
+                    }}
+                    className="px-3.5 py-1.5 bg-[#1C1C1C] border border-white/5 hover:border-[#F5C518] text-[#F5C518] rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition duration-300 cursor-pointer flex items-center space-x-1.5"
+                  >
+                    <span>Reset All Filters</span>
+                  </button>
+                )}
               </div>
 
-              {/* Release Year filter */}
-              <div className="space-y-2">
-                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Release Year</label>
-                <select
-                  value={searchYear}
-                  onChange={e => setSearchYear(e.target.value)}
-                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
-                >
-                  <option value="">All Years</option>
-                  {['2026', '2025', '2024', '2023', '2022', '2018', '2014'].map(y => (
-                    <option key={y} value={y}>{y}</option>
-                  ))}
-                </select>
-              </div>
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-xs text-zinc-400">
+                
+                {/* Genres filter */}
+                <div className="space-y-2">
+                  <label className="font-bold uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Genre Spec</label>
+                  <select
+                    value={searchGenre}
+                    onChange={e => setSearchGenre(e.target.value)}
+                    className="w-full bg-[#181818] border border-white/5 hover:border-white/20 rounded-xl p-3 text-white outline-none cursor-pointer transition focus:border-[#F5C518]/60 focus:ring-1 focus:ring-[#F5C518]/60 text-xs"
+                  >
+                    <option value="">All Genres</option>
+                    {['Action', 'Adventure', 'Animation', 'Comedy', 'Documentary', 'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery', 'Romance', 'Science Fiction', 'TV Movie', 'Thriller', 'War', 'Western'].map(g => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                </div>
 
-              {/* Language filter */}
-              <div className="space-y-2">
-                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Language</label>
-                <select
-                  value={searchLanguage}
-                  onChange={e => setSearchLanguage(e.target.value)}
-                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
-                >
-                  <option value="">All Languages</option>
-                  <option value="EN">English</option>
-                  <option value="ES">Spanish</option>
-                  <option value="FR">French</option>
-                  <option value="JA">Japanese</option>
-                </select>
-              </div>
+                {/* Release Year filter */}
+                <div className="space-y-2">
+                  <label className="font-bold uppercase tracking-widest font-mono block text-zinc-500 text-[10px] flex items-center space-x-1">
+                    <Calendar className="w-3 h-3 text-[#F5C518]" />
+                    <span>Release Year</span>
+                  </label>
+                  <select
+                    value={searchYear}
+                    onChange={e => setSearchYear(e.target.value)}
+                    className="w-full bg-[#181818] border border-white/5 hover:border-white/20 rounded-xl p-3 text-white outline-none cursor-pointer transition focus:border-[#F5C518]/60 focus:ring-1 focus:ring-[#F5C518]/60 text-xs"
+                  >
+                    <option value="">All Years</option>
+                    {ALL_YEARS.map(y => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                </div>
 
-              {/* Streaming provider */}
-              <div className="space-y-2">
-                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Platform Provider</label>
-                <select
-                  value={searchPlatform}
-                  onChange={e => setSearchPlatform(e.target.value)}
-                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
-                >
-                  <option value="">All Platforms</option>
-                  <option value="Netflix">Netflix</option>
-                  <option value="Prime Video">Prime Video</option>
-                  <option value="Disney+">Disney+</option>
-                  <option value="Apple TV+">Apple TV+</option>
-                  <option value="Max">Max</option>
-                </select>
-              </div>
+                {/* Language filter */}
+                <div className="space-y-2">
+                  <label className="font-bold uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Language</label>
+                  <select
+                    value={searchLanguage}
+                    onChange={e => setSearchLanguage(e.target.value)}
+                    className="w-full bg-[#181818] border border-white/5 hover:border-white/20 rounded-xl p-3 text-white outline-none cursor-pointer transition focus:border-[#F5C518]/60 focus:ring-1 focus:ring-[#F5C518]/60 text-xs"
+                  >
+                    <option value="">All Languages</option>
+                    {ALL_LANGUAGES.map(lang => (
+                      <option key={lang.code} value={lang.code}>{lang.name}</option>
+                    ))}
+                  </select>
+                </div>
 
-              {/* Sorter */}
-              <div className="space-y-2">
-                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Sort Index</label>
-                <select
-                  value={searchSort}
-                  onChange={e => setSearchSort(e.target.value)}
-                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
-                >
-                  <option value="popularity">Popularity</option>
-                  <option value="rating">Average Rating</option>
-                  <option value="newest">Newest Releases</option>
-                  <option value="oldest">Oldest Catalog</option>
-                </select>
+                {/* Localized Country Provider Availability */}
+                <div className="space-y-2">
+                  <label className="font-bold uppercase tracking-widest font-mono block text-[#F5C518] text-[10px] flex items-center space-x-1">
+                    <Globe className="w-3 h-3" />
+                    <span>Country (Region)</span>
+                  </label>
+                  <select
+                    value={searchCountry}
+                    onChange={e => setSearchCountry(e.target.value)}
+                    className="w-full bg-[#181818] border border-dashed border-[#F5C518]/30 hover:border-[#F5C518] rounded-xl p-3 text-white outline-none cursor-pointer transition focus:border-[#F5C518] focus:ring-1 focus:ring-[#F5C518] text-xs font-bold"
+                  >
+                    {dynamicCountries.map(c => (
+                      <option key={c.code} value={c.code}>
+                        {c.flag} {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Streaming provider */}
+                <div className="space-y-2">
+                  <label className="font-bold uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Streaming Platform</label>
+                  <select
+                    value={searchPlatform}
+                    onChange={e => setSearchPlatform(e.target.value)}
+                    className="w-full bg-[#181818] border border-white/5 hover:border-white/20 rounded-xl p-3 text-white outline-none cursor-pointer transition focus:border-[#F5C518]/60 focus:ring-1 focus:ring-[#F5C518]/60 text-xs"
+                  >
+                    <option value="">All Platforms</option>
+                    {['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Max', 'Hulu', 'Crunchyroll', 'Peacock', 'Paramount+', 'JioCinema', 'Hotstar', 'Zee5', 'SonyLIV', 'YouTube', 'Google Play Movies'].map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Sorter */}
+                <div className="space-y-2">
+                  <label className="font-bold uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Sort Index</label>
+                  <select
+                    value={searchSort}
+                    onChange={e => setSearchSort(e.target.value)}
+                    className="w-full bg-[#181818] border border-white/5 hover:border-white/20 rounded-xl p-3 text-white outline-none cursor-pointer transition focus:border-[#F5C518]/60 focus:ring-1 focus:ring-[#F5C518]/60 text-xs"
+                  >
+                    <option value="popularity">Popularity</option>
+                    <option value="rating">Average Rating</option>
+                    <option value="newest">Newest Releases</option>
+                    <option value="oldest">Oldest Catalog</option>
+                  </select>
+                </div>
+
               </div>
 
             </div>
 
-            {/* Clear specification filter button */}
-            {(searchGenre || searchYear || searchLanguage || searchPlatform) && (
-              <button
-                onClick={() => {
-                  setSearchGenre('');
-                  setSearchYear('');
-                  setSearchLanguage('');
-                  setSearchPlatform('');
-                  setSearchQuery('');
-                }}
-                className="px-6 py-3 bg-[#111111]/90 border border-white/5 hover:border-[#F5C518] hover:text-[#F5C518] text-white rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition duration-300 cursor-pointer"
-              >
-                Clear Specification Filters
-              </button>
-            )}
-
             {/* Results Grid */}
-            {filteredSearchMovies.length === 0 ? (
-              <div className="text-center py-16 text-zinc-500 italic font-medium">
-                No matching catalog entries found. Double check search queries or expand filters.
+            {filteredSearchMovies.length === 0 && !isSearchingTmdb ? (
+              <div className="text-center py-16 bg-[#111111]/60 border border-white/5 rounded-[2rem] p-8 space-y-4">
+                <p className="text-zinc-500 italic font-medium">
+                  No matching catalog entries found in currently loaded list. Expand filters or try loading more.
+                </p>
+                {hasMoreSearch && (
+                  <button
+                    onClick={() => setSearchPage(prev => prev + 1)}
+                    className="px-6 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-[#F5C518] font-mono font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer transition"
+                  >
+                    Load More Titles from Catalog
+                  </button>
+                )}
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
-                {filteredSearchMovies.map(movie => (
-                  <MovieShowcaseCard
-                    key={movie.id}
-                    movie={movie}
-                    onClick={() => handleMovieClick(movie.id, !!movie.isTvShow)}
-                    onQuickWatchlist={(e) => handleQuickWatchlist(e, movie)}
-                    onQuickRate={(e, score) => handleQuickRate(e, movie.id, score)}
-                    currentUserId={currentUser.id}
-                  />
-                ))}
+              <div className="space-y-8">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                  {filteredSearchMovies.map(movie => (
+                    <MovieShowcaseCard
+                      key={movie.id}
+                      movie={movie}
+                      onClick={() => handleMovieClick(movie.id, !!movie.isTvShow)}
+                      onQuickWatchlist={(e) => handleQuickWatchlist(e, movie)}
+                      onQuickRate={(e, score) => handleQuickRate(e, movie.id, score)}
+                      currentUserId={currentUser.id}
+                    />
+                  ))}
+                </div>
+
+                {/* Loading indicator at bottom of search results */}
+                {isSearchingTmdb && (
+                  <div className="py-6 flex justify-center items-center">
+                    <div className="flex flex-col items-center space-y-2">
+                      <div className="w-8 h-8 border-4 border-[#F5C518] border-t-transparent rounded-full animate-spin" />
+                      <p className="text-xs font-mono text-zinc-500 uppercase tracking-widest animate-pulse">Scanning streaming catalog space...</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Load More Button */}
+                {hasMoreSearch && !isSearchingTmdb && (
+                  <div className="py-6 flex justify-center">
+                    <button
+                      onClick={() => setSearchPage(prev => prev + 1)}
+                      className="px-8 py-3.5 bg-gradient-to-r from-[#F5C518]/10 to-[#F5C518]/20 border border-[#F5C518]/30 hover:border-[#F5C518] hover:from-[#F5C518]/20 hover:to-[#F5C518]/30 text-white font-mono font-bold text-xs uppercase tracking-widest rounded-2xl cursor-pointer transition duration-300 shadow-lg flex items-center gap-3"
+                    >
+                      <span>Load More Titles</span>
+                      <span className="text-[10px] bg-zinc-800 text-[#F5C518] px-2 py-0.5 rounded-full font-bold">Page {searchPage}</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* End of content indicator */}
+                {!hasMoreSearch && filteredSearchMovies.length > 0 && (
+                  <div className="py-8 text-center text-zinc-600 text-xs font-mono uppercase tracking-widest">
+                    🌌 Cinematic Catalog end reached
+                  </div>
+                )}
               </div>
             )}
 
@@ -752,6 +1205,7 @@ export default function App() {
           movieId={selectedMovieId}
           isTv={selectedMovieIsTv}
           userId={currentUser.id}
+          countryCode={searchCountry}
           onClose={() => {
             setSelectedMovieId(null);
             loadAllMedia();
@@ -1008,3 +1462,87 @@ function MovieShowcaseCard({
     </div>
   );
 }
+
+// Horizontal Carousel for scrollable lists with Arrow buttons
+interface HorizontalCarouselProps {
+  title: string;
+  icon: React.ReactNode;
+  items: Movie[];
+  onItemClick: (movie: Movie) => void;
+  onQuickWatchlist: (e: React.MouseEvent, movie: Movie) => void;
+  onQuickRate: (e: React.MouseEvent, movieId: string, score: number) => void;
+  currentUserId: string;
+}
+
+function HorizontalCarousel({
+  title,
+  icon,
+  items,
+  onItemClick,
+  onQuickWatchlist,
+  onQuickRate,
+  currentUserId
+}: HorizontalCarouselProps) {
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+
+  const scroll = (direction: 'left' | 'right') => {
+    if (scrollContainerRef.current) {
+      const container = scrollContainerRef.current;
+      const scrollAmount = container.clientWidth * 0.75;
+      container.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  return (
+    <div className="space-y-4 relative group/carousel">
+      <div className="flex items-center justify-between">
+        <h3 className="text-2xl font-sans font-black tracking-tight text-white flex items-center space-x-2.5 uppercase">
+          {icon}
+          <span>{title}</span>
+        </h3>
+        {/* Navigation Buttons on the top right */}
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => scroll('left')}
+            className="w-10 h-10 rounded-xl bg-[#111111]/90 hover:bg-[#1A1A1A] border border-white/5 hover:border-[#F5C518]/40 text-white flex items-center justify-center transition active:scale-95 cursor-pointer shadow-md"
+            title="Scroll Left"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => scroll('right')}
+            className="w-10 h-10 rounded-xl bg-[#111111]/90 hover:bg-[#1A1A1A] border border-white/5 hover:border-[#F5C518]/40 text-white flex items-center justify-center transition active:scale-95 cursor-pointer shadow-md"
+            title="Scroll Right"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Scrollable Area */}
+      <div className="relative">
+        <div
+          ref={scrollContainerRef}
+          className="flex gap-6 overflow-x-auto scrollbar-none scroll-smooth pb-4 px-1"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        >
+          {items.map(movie => (
+            <div key={movie.id} className="w-[190px] md:w-[230px] flex-shrink-0">
+              <MovieShowcaseCard
+                movie={movie}
+                onClick={() => onItemClick(movie)}
+                onQuickWatchlist={(e) => onQuickWatchlist(e, movie)}
+                onQuickRate={(e, score) => onQuickRate(e, movie.id, score)}
+                currentUserId={currentUserId}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+

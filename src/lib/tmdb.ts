@@ -58,6 +58,7 @@ async function fetchFromTmdb(endpoint: string, params: Record<string, string> = 
 // Map TMDB raw movie to Rovix Movie
 export function mapTmdbMovie(m: any, isTv: boolean = false): Movie {
   const releaseDate = m.release_date || m.first_air_date || '2024-01-01';
+
   return {
     id: String(m.id),
     title: m.title || m.name || 'Untitled Film',
@@ -78,7 +79,7 @@ export function mapTmdbMovie(m: any, isTv: boolean = false): Movie {
     productionCompanies: m.production_companies ? m.production_companies.map((pc: any) => pc.name) : [],
     trailerUrl: '', // will fill from videos
     gallery: [], // will fill from images
-    streamingPlatforms: [], // will fill from providers
+    streamingPlatforms: [],
     rating: m.vote_average ? Math.round(m.vote_average * 10) / 10 : 7.0,
     communityRating: m.vote_average ? Math.round((m.vote_average / 2) * 10) / 10 : 3.5, // map 0-10 to 0-5
     totalRatingsCount: m.vote_count || 100,
@@ -89,7 +90,7 @@ export function mapTmdbMovie(m: any, isTv: boolean = false): Movie {
 }
 
 // Convert genre_ids to names using TMDB catalog
-const GENRE_MAP: Record<number, string> = {
+export const GENRE_MAP: Record<number, string> = {
   28: 'Action', 12: 'Adventure', 16: 'Animation', 35: 'Comedy', 80: 'Crime',
   99: 'Documentary', 18: 'Drama', 10751: 'Family', 14: 'Fantasy', 36: 'History',
   27: 'Horror', 10402: 'Music', 9648: 'Mystery', 10749: 'Romance', 878: 'Sci-Fi',
@@ -103,9 +104,9 @@ function getGenreNames(ids: number[]): string[] {
 }
 
 // Public API Functions
-export async function getTrendingMovies(timeWindow: 'day' | 'week' = 'day'): Promise<Movie[]> {
+export async function getTrendingMovies(timeWindow: 'day' | 'week' = 'day', page: number = 1): Promise<Movie[]> {
   try {
-    const data = await fetchFromTmdb(`/trending/movie/${timeWindow}`);
+    const data = await fetchFromTmdb(`/trending/movie/${timeWindow}`, { page: String(page) });
     return data.results.map((m: any) => mapTmdbMovie(m, false));
   } catch (err) {
     console.warn('TMDB failing or not configured. Using fallback movies.', err);
@@ -113,9 +114,9 @@ export async function getTrendingMovies(timeWindow: 'day' | 'week' = 'day'): Pro
   }
 }
 
-export async function getTrendingTVShows(timeWindow: 'day' | 'week' = 'day'): Promise<Movie[]> {
+export async function getTrendingTVShows(timeWindow: 'day' | 'week' = 'day', page: number = 1): Promise<Movie[]> {
   try {
-    const data = await fetchFromTmdb(`/trending/tv/${timeWindow}`);
+    const data = await fetchFromTmdb(`/trending/tv/${timeWindow}`, { page: String(page) });
     return data.results.map((m: any) => mapTmdbMovie(m, true));
   } catch (err) {
     console.warn('TMDB failing or not configured. Using fallback TV shows.', err);
@@ -123,18 +124,18 @@ export async function getTrendingTVShows(timeWindow: 'day' | 'week' = 'day'): Pr
   }
 }
 
-export async function getPopularMovies(): Promise<Movie[]> {
+export async function getPopularMovies(page: number = 1): Promise<Movie[]> {
   try {
-    const data = await fetchFromTmdb('/movie/popular');
+    const data = await fetchFromTmdb('/movie/popular', { page: String(page) });
     return data.results.map((m: any) => mapTmdbMovie(m, false));
   } catch (err) {
     return MOCK_MOVIES.filter(m => !m.isTvShow);
   }
 }
 
-export async function getPopularTVShows(): Promise<Movie[]> {
+export async function getPopularTVShows(page: number = 1): Promise<Movie[]> {
   try {
-    const data = await fetchFromTmdb('/tv/popular');
+    const data = await fetchFromTmdb('/tv/popular', { page: String(page) });
     return data.results.map((m: any) => mapTmdbMovie(m, true));
   } catch (err) {
     return MOCK_MOVIES.filter(m => !!m.isTvShow);
@@ -168,10 +169,10 @@ export async function getTopRated(type: 'movie' | 'tv' = 'movie'): Promise<Movie
   }
 }
 
-export async function searchTMDB(query: string): Promise<any[]> {
+export async function searchTMDB(query: string, page: number = 1): Promise<any[]> {
   if (!query.trim()) return [];
   try {
-    const data = await fetchFromTmdb('/search/multi', { query });
+    const data = await fetchFromTmdb('/search/multi', { query, page: String(page) });
     return data.results.map((item: any) => {
       if (item.media_type === 'person') {
         return {
@@ -199,11 +200,79 @@ export async function searchTMDB(query: string): Promise<any[]> {
   }
 }
 
-export async function getMovieDetails(id: string, isTvShow: boolean = false): Promise<Movie> {
+export async function discoverMedia(
+  type: 'movie' | 'tv',
+  params: Record<string, string> = {}
+): Promise<Movie[]> {
+  try {
+    const data = await fetchFromTmdb(`/discover/${type}`, params);
+    return data.results.map((m: any) => mapTmdbMovie(m, type === 'tv'));
+  } catch (err) {
+    console.warn(`Discover failed for ${type}`, err);
+    return [];
+  }
+}
+
+export async function getLocalizedDiscover(
+  type: 'movie' | 'tv',
+  countryCode: string,
+  page: number = 1
+): Promise<Movie[]> {
+  const params: Record<string, string> = {
+    page: String(page),
+    sort_by: 'popularity.desc',
+  };
+
+  if (countryCode === 'IN') {
+    params.with_origin_country = 'IN';
+    params.with_original_language = 'hi|ta|te|ml|kn|pa|mr';
+  } else if (countryCode === 'KR') {
+    params.with_origin_country = 'KR';
+    params.with_original_language = 'ko';
+  } else if (countryCode === 'JP') {
+    params.with_origin_country = 'JP';
+    params.with_original_language = 'ja';
+  } else if (countryCode === 'FR') {
+    params.with_origin_country = 'FR';
+    params.with_original_language = 'fr';
+  } else if (countryCode === 'ES') {
+    params.with_origin_country = 'ES';
+    params.with_original_language = 'es';
+  } else if (countryCode === 'IT') {
+    params.with_origin_country = 'IT';
+    params.with_original_language = 'it';
+  } else if (countryCode === 'DE') {
+    params.with_origin_country = 'DE';
+    params.with_original_language = 'de';
+  } else if (countryCode === 'BR') {
+    params.with_origin_country = 'BR';
+    params.with_original_language = 'pt';
+  } else if (['US', 'GB', 'CA', 'AU'].includes(countryCode)) {
+    params.with_origin_country = countryCode;
+  }
+
+  return discoverMedia(type, params);
+}
+
+export async function getMovieDetails(id: string, isTvShow: boolean = false, countryCode: string = 'US'): Promise<Movie> {
   try {
     const endpoint = isTvShow ? `/tv/${id}` : `/movie/${id}`;
     const details = await fetchFromTmdb(endpoint);
     const movie = mapTmdbMovie(details, isTvShow);
+
+    // Fetch external IDs to retrieve imdb_id
+    try {
+      const externalIds = await fetchFromTmdb(`${endpoint}/external_ids`);
+      if (externalIds && externalIds.imdb_id) {
+        movie.imdbId = externalIds.imdb_id;
+      } else if (details.imdb_id) {
+        movie.imdbId = details.imdb_id;
+      }
+    } catch (e) {
+      if (details.imdb_id) {
+        movie.imdbId = details.imdb_id;
+      }
+    }
 
     // Fetch credits (cast & crew)
     try {
@@ -269,15 +338,27 @@ export async function getMovieDetails(id: string, isTvShow: boolean = false): Pr
     try {
       const providers = await fetchFromTmdb(`${endpoint}/watch/providers`);
       if (providers && providers.results) {
-        // Use user locale if available or fall back to 'US' then 'IN'
-        const region = 'US';
-        const localeData = providers.results[region] || providers.results['IN'] || Object.values(providers.results)[0];
-        if (localeData && localeData.flatrate) {
-          movie.streamingPlatforms = localeData.flatrate.map((p: any) => p.provider_name);
+        const localeData = providers.results[countryCode];
+        const list: string[] = [];
+        if (localeData) {
+          if (localeData.flatrate) {
+            localeData.flatrate.forEach((p: any) => list.push(p.provider_name));
+          }
+          if (localeData.rent) {
+            localeData.rent.forEach((p: any) => list.push(p.provider_name));
+          }
+          if (localeData.buy) {
+            localeData.buy.forEach((p: any) => list.push(p.provider_name));
+          }
         }
+        movie.streamingPlatforms = Array.from(new Set(list));
+        movie.rawProviders = providers.results;
+      } else {
+        movie.streamingPlatforms = [];
       }
     } catch (e) {
       console.warn('Failed to load streaming providers', e);
+      movie.streamingPlatforms = [];
     }
 
     return movie;
@@ -286,6 +367,46 @@ export async function getMovieDetails(id: string, isTvShow: boolean = false): Pr
     const local = MOCK_MOVIES.find(m => m.id === id);
     if (local) return local;
     throw err;
+  }
+}
+
+export async function getWatchProviders(id: string, isTvShow: boolean = false): Promise<any> {
+  try {
+    const endpoint = isTvShow ? `/tv/${id}/watch/providers` : `/movie/${id}/watch/providers`;
+    const data = await fetchFromTmdb(endpoint);
+    return data?.results || null;
+  } catch (err) {
+    return null;
+  }
+}
+
+export async function getNetflixIdFromTmdbOrImdb(tmdbId: string, imdbId?: string, isTv: boolean = false): Promise<string | null> {
+  try {
+    let sparql = '';
+    if (imdbId) {
+      sparql = `SELECT ?netflixID WHERE {
+        ?item wdt:P345 "${imdbId}".
+        ?item wdt:P1874 ?netflixID.
+      } LIMIT 1`;
+    } else {
+      const tmdbProp = isTv ? 'P4874' : 'P3047';
+      sparql = `SELECT ?netflixID WHERE {
+        ?item wdt:${tmdbProp} "${tmdbId}".
+        ?item wdt:P1874 ?netflixID.
+      } LIMIT 1`;
+    }
+    const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(sparql)}&format=json`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const data = await response.json();
+    const bindings = data?.results?.bindings;
+    if (bindings && bindings.length > 0) {
+      return bindings[0].netflixID.value;
+    }
+    return null;
+  } catch (err) {
+    console.warn('Failed to query Wikidata for Netflix ID', err);
+    return null;
   }
 }
 

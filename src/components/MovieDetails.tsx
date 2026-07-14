@@ -29,7 +29,7 @@ import {
 } from '../db/storage';
 import { Movie, Review, WatchlistStatus } from '../types';
 import RovixMeter from './RovixMeter';
-import { getMovieDetails } from '../lib/tmdb';
+import { getMovieDetails, getNetflixIdFromTmdbOrImdb } from '../lib/tmdb';
 
 interface MovieDetailsProps {
   movieId: string;
@@ -38,6 +38,7 @@ interface MovieDetailsProps {
   onClose: () => void;
   onMovieClick: (id: string, isTv: boolean) => void;
   allMovies: Movie[];
+  countryCode?: string;
 }
 
 export default function MovieDetails({
@@ -46,7 +47,8 @@ export default function MovieDetails({
   userId,
   onClose,
   onMovieClick,
-  allMovies
+  allMovies,
+  countryCode = 'US'
 }: MovieDetailsProps) {
   const [movie, setMovie] = useState<Movie | null>(null);
   const [userRating, setUserRating] = useState<number>(0);
@@ -76,7 +78,7 @@ export default function MovieDetails({
   const loadFilmDetails = async () => {
     setLoading(true);
     try {
-      const found = await getMovieDetails(movieId, isTv);
+      const found = await getMovieDetails(movieId, isTv, countryCode);
       if (found) {
         setMovie(found);
         setUserRating(getUserRating(userId, movieId));
@@ -88,6 +90,18 @@ export default function MovieDetails({
 
         // Load reviews
         setReviews(getReviews(movieId));
+
+        // Retrieve exact Netflix ID if the film is available on Netflix
+        if (found.streamingPlatforms?.some(p => p.toLowerCase().includes('netflix'))) {
+          try {
+            const netflixId = await getNetflixIdFromTmdbOrImdb(found.id, found.imdbId, isTv);
+            if (netflixId) {
+              setMovie(prev => prev ? { ...prev, netflixId } : null);
+            }
+          } catch (e) {
+            console.warn('Failed to retrieve exact Netflix ID', e);
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to load TMDB details', err);
@@ -98,7 +112,7 @@ export default function MovieDetails({
 
   useEffect(() => {
     loadFilmDetails();
-  }, [movieId, userId]);
+  }, [movieId, userId, countryCode]);
 
   if (loading) {
     return (
@@ -121,6 +135,24 @@ export default function MovieDetails({
       </div>
     );
   }
+
+  // Check if movie is currently playing in cinemas (released between -15 days and 120 days from now, and has no streaming platforms)
+  const isMovieInCinemas = (() => {
+    if (!movie) return false;
+    if (movie.isTvShow) return false;
+    if (!movie.releaseDate) return false;
+    try {
+      const releaseDate = new Date(movie.releaseDate);
+      const today = new Date();
+      const diffTime = today.getTime() - releaseDate.getTime();
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+      
+      const hasNoStreaming = !movie.streamingPlatforms || movie.streamingPlatforms.length === 0;
+      return hasNoStreaming && diffDays >= -15 && diffDays <= 120;
+    } catch (e) {
+      return false;
+    }
+  })();
 
   // Toast Helper
   const triggerToast = (msg: string) => {
@@ -216,10 +248,93 @@ export default function MovieDetails({
   const STREAMING_PLATFORMS_DATA: Record<string, string> = {
     'Netflix': 'https://images.unsplash.com/photo-1574375927938-d5a98e8edd86?w=100&auto=format&fit=crop&q=80',
     'Prime Video': 'https://images.unsplash.com/photo-1628157582853-a796fa650a6a?w=100&auto=format&fit=crop&q=80',
+    'Amazon Prime Video': 'https://images.unsplash.com/photo-1628157582853-a796fa650a6a?w=100&auto=format&fit=crop&q=80',
     'Disney+': 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=100&auto=format&fit=crop&q=80',
+    'Disney Plus': 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=100&auto=format&fit=crop&q=80',
+    'Disney+ Hotstar': 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=100&auto=format&fit=crop&q=80',
+    'Hotstar': 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=100&auto=format&fit=crop&q=80',
     'Apple TV+': 'https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=100&auto=format&fit=crop&q=80',
-    'Max': 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=100&auto=format&fit=crop&q=80'
+    'Apple TV': 'https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=100&auto=format&fit=crop&q=80',
+    'Max': 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=100&auto=format&fit=crop&q=80',
+    'HBO Max': 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=100&auto=format&fit=crop&q=80',
+    'Hulu': 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=100&auto=format&fit=crop&q=80',
+    'Jio Cinema': 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=100&auto=format&fit=crop&q=80',
+    'JioCinema': 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=100&auto=format&fit=crop&q=80',
+    'Zee5': 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=100&auto=format&fit=crop&q=80',
+    'SonyLIV': 'https://images.unsplash.com/photo-1485846234645-a62644f84728?w=100&auto=format&fit=crop&q=80',
+    'YouTube': 'https://images.unsplash.com/photo-1611162616305-c69b3fa7fbe0?w=100&auto=format&fit=crop&q=80',
+    'YouTube Premium': 'https://images.unsplash.com/photo-1611162616305-c69b3fa7fbe0?w=100&auto=format&fit=crop&q=80'
   };
+
+  // Helper to generate a direct search or streaming link on the target platform
+  const getStreamingUrl = (platformName: string, title: string, isTvShow: boolean): string => {
+    const query = encodeURIComponent(title);
+    const lower = platformName.toLowerCase();
+    
+    if (lower.includes('netflix')) {
+      if (movie?.netflixId) {
+        return `https://www.netflix.com/search?q=${query}&jbv=${movie.netflixId}`;
+      }
+      return `https://www.netflix.com/search?q=${query}`;
+    }
+    if (lower.includes('amazon') || lower.includes('prime')) {
+      return `https://www.amazon.com/s?k=${query}&i=instant-video`;
+    }
+    if (lower.includes('disney') || lower.includes('hotstar')) {
+      return `https://www.hotstar.com/in/explore?search_query=${query}`;
+    }
+    if (lower.includes('apple')) {
+      return `https://tv.apple.com/search?term=${query}`;
+    }
+    if (lower.includes('max') || lower.includes('hbo')) {
+      return `https://www.max.com/search/${query}/`;
+    }
+    if (lower.includes('hulu')) {
+      return `https://www.hulu.com/search?q=${query}`;
+    }
+    if (lower.includes('jio')) {
+      return `https://www.jiocinema.com/search/${query}`;
+    }
+    if (lower.includes('zee')) {
+      return `https://www.zee5.com/search?q=${query}`;
+    }
+    if (lower.includes('sony')) {
+      return `https://www.sonyliv.com/search?q=${query}`;
+    }
+    if (lower.includes('youtube')) {
+      return `https://www.youtube.com/results?search_query=${encodeURIComponent(title + " " + (isTvShow ? "series" : "movie"))}`;
+    }
+    if (lower.includes('paramount')) {
+      return `https://www.paramountplus.com/search/?q=${query}`;
+    }
+    
+    // Generic high-quality Google fallback that instantly routes to the stream provider
+    return `https://www.google.com/search?q=${encodeURIComponent("Watch " + title + " " + (isTvShow ? "TV Series" : "Movie") + " on " + platformName)}`;
+  };
+
+  // Helper to stylize brand-specific badges matching platform identities
+  const getPlatformStyle = (platformName: string) => {
+    const lower = platformName.toLowerCase();
+    if (lower.includes('netflix')) return { bg: 'bg-red-950/40 border-red-800/40 hover:border-red-500/60', text: 'text-red-400' };
+    if (lower.includes('amazon') || lower.includes('prime')) return { bg: 'bg-sky-950/40 border-sky-800/40 hover:border-sky-500/60', text: 'text-sky-400' };
+    if (lower.includes('disney') || lower.includes('hotstar')) return { bg: 'bg-indigo-950/40 border-indigo-800/40 hover:border-indigo-500/60', text: 'text-indigo-400' };
+    if (lower.includes('apple')) return { bg: 'bg-zinc-900 border-zinc-700 hover:border-zinc-500', text: 'text-zinc-200' };
+    if (lower.includes('max') || lower.includes('hbo')) return { bg: 'bg-blue-950/40 border-blue-800/40 hover:border-blue-500/60', text: 'text-blue-400' };
+    if (lower.includes('hulu')) return { bg: 'bg-emerald-950/40 border-emerald-800/40 hover:border-emerald-500/60', text: 'text-emerald-400' };
+    if (lower.includes('jio')) return { bg: 'bg-fuchsia-950/40 border-fuchsia-800/40 hover:border-fuchsia-500/60', text: 'text-fuchsia-400' };
+    if (lower.includes('zee')) return { bg: 'bg-violet-950/40 border-violet-800/40 hover:border-violet-500/60', text: 'text-violet-400' };
+    if (lower.includes('sony') || lower.includes('liv')) return { bg: 'bg-amber-950/40 border-amber-800/40 hover:border-amber-500/60', text: 'text-amber-400' };
+    if (lower.includes('youtube')) return { bg: 'bg-rose-950/40 border-rose-800/40 hover:border-rose-500/60', text: 'text-rose-400' };
+    
+    return { bg: 'bg-zinc-950 border-white/5 hover:border-white/20', text: 'text-[#F5C518]' };
+  };
+
+  // Helper to extract the official TMDB Streaming Portal link
+  const tmdbWatchLink = (() => {
+    if (!movie || !movie.rawProviders) return null;
+    const localeData = movie.rawProviders[countryCode] || movie.rawProviders['US'] || movie.rawProviders['IN'] || Object.values(movie.rawProviders)[0];
+    return localeData?.link || null;
+  })();
 
   // Filter similar recommended movies
   const similarMovies = allMovies
@@ -703,21 +818,79 @@ export default function MovieDetails({
           </div>
           )}
 
-          {/* Streaming Platform availability */}
-          <div className="bg-zinc-900/40 border border-white/5 p-6 rounded-2xl space-y-4">
-            <h3 className="font-sans font-bold text-sm text-gray-400 uppercase tracking-wider">Streaming Availability</h3>
-            <div className="flex flex-wrap gap-3">
-              {movie.streamingPlatforms.map((platform) => {
-                const img = STREAMING_PLATFORMS_DATA[platform];
-                return (
-                  <div key={platform} className="flex items-center space-x-2 bg-zinc-950 p-2.5 rounded-xl border border-white/5 grow shrink-0 min-w-[120px]">
-                    <img src={img || 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=100'} alt={platform} className="w-6 h-6 rounded-full object-cover border border-white/10" />
-                    <span className="text-xs font-semibold text-white">{platform}</span>
+          {/* Streaming & Cinema Availability */}
+          {isMovieInCinemas ? (
+            <div className="bg-zinc-900/40 border border-[#F5C518]/20 p-6 rounded-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-sans font-bold text-sm text-gray-400 uppercase tracking-wider flex items-center space-x-2">
+                  <span className="inline-block w-2 h-2 rounded-full bg-[#F5C518] animate-pulse"></span>
+                  <span>Cinema Availability</span>
+                </h3>
+                <span className="text-[10px] font-mono text-zinc-500 uppercase">Region: {countryCode}</span>
+              </div>
+              
+              <div className="flex items-start space-x-4 p-4 bg-zinc-950/40 rounded-xl border border-white/5">
+                <div className="text-3xl shrink-0 select-none">🎬</div>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-white font-sans">Playing in Cinemas</h4>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    This movie is currently playing in theaters. Check local listings for showtimes and ticket availability in your region.
+                  </p>
+                  <div className="pt-2">
+                    <a
+                      href={`https://www.google.com/search?q=${encodeURIComponent("showtimes for " + movie.title + " near me")}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center space-x-1 px-3 py-1.5 bg-[#F5C518]/10 hover:bg-[#F5C518]/25 border border-[#F5C518]/30 hover:border-[#F5C518] text-[#F5C518] hover:text-white rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all duration-300 active:scale-95"
+                    >
+                      <span>Search Showtimes ➔</span>
+                    </a>
                   </div>
-                );
-              })}
+                </div>
+              </div>
             </div>
-          </div>
+          ) : (
+            movie.streamingPlatforms && movie.streamingPlatforms.length > 0 && (
+              <div className="bg-zinc-900/40 border border-white/5 p-6 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-sans font-bold text-sm text-gray-400 uppercase tracking-wider">Streaming Availability</h3>
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase">Region: {countryCode}</span>
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {movie.streamingPlatforms.map((platform) => {
+                    const img = STREAMING_PLATFORMS_DATA[platform] || STREAMING_PLATFORMS_DATA[Object.keys(STREAMING_PLATFORMS_DATA).find(k => platform.toLowerCase().includes(k.toLowerCase())) || ''];
+                    const style = getPlatformStyle(platform);
+                    const streamUrl = getStreamingUrl(platform, movie.title, !!movie.isTvShow);
+                    
+                    return (
+                      <a
+                        key={platform}
+                        href={streamUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`flex items-center space-x-3 p-3 rounded-xl border transition-all duration-300 hover:scale-[1.03] active:scale-95 group shadow-md ${style.bg}`}
+                      >
+                        <div className="relative shrink-0">
+                          <img
+                            src={img || 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=100'}
+                            alt={platform}
+                            className="w-7 h-7 rounded-full object-cover border border-white/10 group-hover:scale-105 transition-transform"
+                          />
+                          <span className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-green-500 border border-black rounded-full flex items-center justify-center animate-ping" />
+                          <span className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-green-500 border border-black rounded-full flex items-center justify-center" />
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <span className={`text-xs font-bold truncate ${style.text}`}>{platform}</span>
+                          <span className="text-[9px] text-zinc-500 font-mono font-medium">STREAM NOW ➔</span>
+                        </div>
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            )
+          )}
 
           {/* Metadata Grid */}
           <div className="bg-zinc-900/40 border border-white/5 p-6 rounded-2xl space-y-4 text-xs font-mono">

@@ -16,6 +16,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import { 
   User, 
   Movie, 
@@ -62,6 +63,9 @@ function notifyListeners() {
 // ----------------------------------------------------
 // Real-time Firestore Sync Subscriptions
 // ----------------------------------------------------
+let notificationsUnsubscribe: (() => void) | null = null;
+let reportsUnsubscribe: (() => void) | null = null;
+
 export function initRealtimeSync() {
   // Listen to users
   onSnapshot(collection(db, 'users'), (snapshot) => {
@@ -111,22 +115,6 @@ export function initRealtimeSync() {
     notifyListeners();
   });
 
-  // Listen to reports
-  onSnapshot(collection(db, 'reports'), (snapshot) => {
-    const list: Report[] = [];
-    snapshot.forEach(d => list.push(d.data() as Report));
-    reportsCache = list;
-    notifyListeners();
-  });
-
-  // Listen to notifications
-  onSnapshot(collection(db, 'notifications'), (snapshot) => {
-    const list: Notification[] = [];
-    snapshot.forEach(d => list.push(d.data() as Notification));
-    notificationsCache = list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    notifyListeners();
-  });
-
   // Listen to announcements
   onSnapshot(collection(db, 'announcements'), (snapshot) => {
     const list: Announcement[] = [];
@@ -135,6 +123,49 @@ export function initRealtimeSync() {
       announcementsCache = list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     }
     notifyListeners();
+  });
+
+  // Dynamically manage auth-required subscriptions
+  onAuthStateChanged(auth, async (firebaseUser) => {
+    // Unsubscribe from previous listeners
+    if (notificationsUnsubscribe) {
+      notificationsUnsubscribe();
+      notificationsUnsubscribe = null;
+    }
+    if (reportsUnsubscribe) {
+      reportsUnsubscribe();
+      reportsUnsubscribe = null;
+    }
+
+    if (firebaseUser) {
+      // Subscribe to user-specific notifications to align with Firestore rules
+      const q = query(collection(db, 'notifications'), where('userId', '==', firebaseUser.uid));
+      notificationsUnsubscribe = onSnapshot(q, (snapshot) => {
+        const list: Notification[] = [];
+        snapshot.forEach(d => list.push(d.data() as Notification));
+        notificationsCache = list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        notifyListeners();
+      }, (error) => {
+        console.warn('Notifications real-time sync disabled or restricted:', error.message);
+      });
+
+      // Subscribe to reports (accessible when authenticated)
+      reportsUnsubscribe = onSnapshot(collection(db, 'reports'), (snapshot) => {
+        const list: Report[] = [];
+        snapshot.forEach(d => list.push(d.data() as Report));
+        reportsCache = list;
+        notifyListeners();
+      }, (error) => {
+        console.warn('Reports real-time sync restricted:', error.message);
+      });
+
+      // Seed mock data if database is empty now that we are authenticated
+      seedInitialFirestoreData();
+    } else {
+      notificationsCache = [];
+      reportsCache = [];
+      notifyListeners();
+    }
   });
 }
 
@@ -174,7 +205,6 @@ export async function seedInitialFirestoreData() {
 // ----------------------------------------------------
 export function initDatabase() {
   initRealtimeSync();
-  seedInitialFirestoreData();
 }
 
 export function getTMDBKey(): string {
