@@ -1,0 +1,6 @@
+{
+  "name": "Rovix",
+  "description": "Discover. Track. Share. A premium tracking, scoring, and critical review community platform for movies and TV shows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

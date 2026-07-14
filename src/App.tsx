@@ -1,0 +1,1010 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Film,
+  Compass,
+  Search,
+  Bookmark,
+  User,
+  Star,
+  Bell,
+  X,
+  Plus,
+  CheckCircle,
+  TrendingUp,
+  Award,
+  BookOpen,
+  Eye,
+  Settings,
+  Flame,
+  ArrowUpRight,
+  ShieldAlert,
+  ThumbsUp,
+  UserCheck,
+  UserPlus,
+  Users
+} from 'lucide-react';
+import {
+  initDatabase,
+  getCurrentUser,
+  setCurrentUser,
+  getMovies,
+  getReviews,
+  getWatchlist,
+  toggleWatchlist,
+  getUserRating,
+  saveRating,
+  getNotifications,
+  markNotificationsAsRead,
+  getAnnouncements,
+  toggleFollow,
+  isFollowing,
+  addNotification,
+  subscribeToDatabaseChanges,
+  getUsersList
+} from './db/storage';
+import { Movie, Review, User as UserType, Notification, Announcement, WatchlistStatus } from './types';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './lib/firebase';
+import { getTrendingMovies, getTrendingTVShows } from './lib/tmdb';
+
+// Import Modular tabs/panels
+import BottomNavigation from './components/BottomNavigation';
+import MovieDetails from './components/MovieDetails';
+import ProfileTab from './components/ProfileTab';
+import AdminPanel from './components/AdminPanel';
+import AuthScreen from './components/AuthScreen';
+
+export default function App() {
+  const [currentUser, setLocalCurrentUser] = useState<UserType | null>(null);
+  const [activeTab, setActiveTab] = useState<string>('home');
+
+  // Master Lists
+  const [allMovies, setAllMovies] = useState<Movie[]>([]);
+  const [allReviews, setAllReviews] = useState<Review[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [usersList, setUsersList] = useState<UserType[]>([]);
+
+  // Selected Overlay States
+  const [selectedMovieId, setSelectedMovieId] = useState<string | null>(null);
+  const [selectedMovieIsTv, setSelectedMovieIsTv] = useState<boolean>(false);
+  const [showNotifications, setShowNotifications] = useState<boolean>(false);
+  const [selectedUserOverlay, setSelectedUserOverlay] = useState<UserType | null>(null);
+
+  // Search tab states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchGenre, setSearchGenre] = useState('');
+  const [searchYear, setSearchYear] = useState('');
+  const [searchLanguage, setSearchLanguage] = useState('');
+  const [searchPlatform, setSearchPlatform] = useState('');
+  const [searchSort, setSearchSort] = useState('popularity');
+
+  // Watchlist tab states
+  const [watchlistFilter, setWatchlistFilter] = useState<WatchlistStatus>('Plan to Watch');
+  const [watchlistQuery, setWatchlistQuery] = useState('');
+
+  // Alerts
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Initialize DB
+  useEffect(() => {
+    initDatabase();
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
+      if (!firebaseUser) {
+        setLocalCurrentUser(null);
+      }
+    });
+
+    const unsubscribeDb = subscribeToDatabaseChanges(() => {
+      setLocalCurrentUser(getCurrentUser());
+      loadAllMedia();
+    });
+
+    loadAllMedia();
+
+    return () => {
+      unsubscribeAuth();
+      unsubscribeDb();
+    };
+  }, []);
+
+  const loadAllMedia = async () => {
+    try {
+      const trendingM = await getTrendingMovies();
+      const trendingT = await getTrendingTVShows();
+      if (trendingM.length > 0 || trendingT.length > 0) {
+        setAllMovies([...trendingM, ...trendingT]);
+      } else {
+        setAllMovies(getMovies());
+      }
+    } catch (e) {
+      setAllMovies(getMovies());
+    }
+    setAllReviews(getReviews());
+    setAnnouncements(getAnnouncements());
+    setUsersList(getUsersList());
+  };
+
+  const handleAuthSuccess = (u: UserType) => {
+    setCurrentUser(u);
+    setLocalCurrentUser(u);
+    loadAllMedia();
+    triggerToast(`Welcome back, ${u.displayName}!`);
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setLocalCurrentUser(null);
+    setActiveTab('home');
+    triggerToast('Logged out of Rovix gateway.');
+  };
+
+  const triggerToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Movie click opens details modal
+  const handleMovieClick = (id: string, isTvShow: boolean) => {
+    setSelectedMovieId(id);
+    setSelectedMovieIsTv(isTvShow);
+  };
+
+  // Quick Watchlist click
+  const handleQuickWatchlist = (e: React.MouseEvent, movie: Movie) => {
+    e.stopPropagation();
+    if (!currentUser) return;
+    toggleWatchlist(currentUser.id, movie.id, 'Plan to Watch');
+    triggerToast(`Watchlist updated for "${movie.title}"`);
+    loadAllMedia();
+  };
+
+  // Quick rating score
+  const handleQuickRate = (e: React.MouseEvent, movieId: string, score: number) => {
+    e.stopPropagation();
+    if (!currentUser) return;
+    saveRating(currentUser.id, movieId, score);
+    triggerToast(`Rated movie ${score} Stars!`);
+    loadAllMedia();
+  };
+
+  // Toggle user follow connection
+  const handleToggleFollowUser = (targetUser: UserType) => {
+    if (!currentUser) return;
+    const isNowFollowing = toggleFollow(currentUser.id, targetUser.id);
+    triggerToast(isNowFollowing ? `Following @${targetUser.username}` : `Unfollowed @${targetUser.username}`);
+    
+    // Reload user models
+    const rawUsers = localStorage.getItem('cineverse_users');
+    if (rawUsers) {
+      const parsed: UserType[] = JSON.parse(rawUsers);
+      setUsersList(parsed);
+      const updatedTarget = parsed.find(u => u.id === targetUser.id);
+      if (updatedTarget) {
+        setSelectedUserOverlay(updatedTarget);
+      }
+    }
+    setLocalCurrentUser(getCurrentUser());
+  };
+
+  // Sync users list from Admin operations
+  const handleUpdateUsersList = () => {
+    const rawUsers = localStorage.getItem('cineverse_users');
+    if (rawUsers) {
+      setUsersList(JSON.parse(rawUsers));
+    }
+  };
+
+  // Open User Profile Card Overlay
+  const handleOpenUserOverlay = (username: string) => {
+    const found = usersList.find(u => u.username === username);
+    if (found) {
+      setSelectedUserOverlay(found);
+    }
+  };
+
+  if (!currentUser) {
+    return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
+  }
+
+  // Filter Search results as user types
+  const filteredSearchMovies = allMovies.filter(m => {
+    const matchesQuery = m.title.toLowerCase().includes(searchQuery.toLowerCase()) || m.overview.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesGenre = !searchGenre || m.genres.includes(searchGenre);
+    const matchesYear = !searchYear || m.releaseDate.startsWith(searchYear);
+    const matchesLang = !searchLanguage || m.language.toUpperCase() === searchLanguage.toUpperCase();
+    const matchesPlatform = !searchPlatform || m.streamingPlatforms.includes(searchPlatform);
+    return matchesQuery && matchesGenre && matchesYear && matchesLang && matchesPlatform;
+  }).sort((a, b) => {
+    if (searchSort === 'rating') return b.communityRating - a.communityRating;
+    if (searchSort === 'newest') return b.releaseDate.localeCompare(a.releaseDate);
+    if (searchSort === 'oldest') return a.releaseDate.localeCompare(b.releaseDate);
+    return b.totalRatingsCount - a.totalRatingsCount; // default popularity
+  });
+
+  // Watchlist filter lists
+  const myWatchlistItems = getWatchlist(currentUser.id).filter(w => {
+    const matchesStatus = w.status === watchlistFilter;
+    const matchesQuery = w.movieTitle.toLowerCase().includes(watchlistQuery.toLowerCase());
+    return matchesStatus && matchesQuery;
+  });
+
+  const unreadNotifications = getNotifications(currentUser.id).filter(n => !n.isRead).length;
+
+  return (
+    <div className="min-h-screen bg-[#090909] text-white selection:bg-[#F5C518] selection:text-black font-sans relative overflow-x-hidden">
+      
+      {/* Subtle Background Bento Glow Effects */}
+      <div className="fixed top-[-10%] right-[-10%] w-[55%] h-[55%] bento-glow-top opacity-70 blur-[130px] pointer-events-none z-0" />
+      <div className="fixed bottom-[-10%] left-[-10%] w-[45%] h-[45%] bento-glow-bottom opacity-70 blur-[130px] pointer-events-none z-0" />
+      
+      {/* Dynamic Toast Container */}
+      {toast && (
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 bg-[#F5C518] text-black px-6 py-4 rounded-2xl font-black shadow-2xl shadow-[#F5C518]/20 z-50 animate-bounce flex items-center space-x-2 border border-white/15">
+          <span>{toast}</span>
+        </div>
+      )}
+
+      {/* Navigation bar */}
+      <BottomNavigation
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        isAdmin={currentUser.isAdmin}
+        unreadNotifications={unreadNotifications}
+        onOpenNotifications={() => {
+          setShowNotifications(true);
+          markNotificationsAsRead(currentUser.id);
+        }}
+        userAvatar={currentUser.avatarUrl}
+      />
+
+      {/* MAIN VIEWPORT BODY */}
+      <main className="pb-24 relative z-10">
+        
+        {/* 1. HOME TAB VIEW */}
+        {activeTab === 'home' && (
+          <div className="space-y-12 animate-fadeIn pt-20 md:pt-28">
+            
+            {/* Immersive Hero cinematic spotlight */}
+            <div className="relative h-[380px] md:h-[580px] max-w-7xl mx-auto rounded-[2.5rem] md:rounded-[3rem] overflow-hidden border border-white/5 shadow-2xl bg-zinc-950">
+              <div className="absolute inset-0 z-0">
+                <img
+                  src="https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1200&auto=format&fit=crop&q=80"
+                  alt="Spotlight"
+                  className="w-full h-full object-cover opacity-60 transition-transform duration-1000 ease-out hover:scale-105"
+                  referrerPolicy="no-referrer"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#090909] via-[#090909]/65 to-transparent" />
+              </div>
+
+              <div className="absolute bottom-10 left-6 md:left-14 max-w-2xl space-y-4 z-10">
+                <div className="flex gap-2">
+                  <span className="px-4 py-1.5 bg-[#F5C518] text-black text-[9px] font-black rounded-full uppercase tracking-widest font-mono shadow-lg shadow-[#F5C518]/20">
+                    Trending This Week
+                  </span>
+                  <span className="px-4 py-1.5 bg-white/5 backdrop-blur-xl text-white text-[9px] font-black rounded-full uppercase tracking-widest font-mono border border-white/10">
+                    Sci-Fi / Adventure
+                  </span>
+                </div>
+                <h1 className="text-4xl md:text-7xl font-sans font-black tracking-tighter text-white uppercase leading-none">Dune: Part Two</h1>
+                <p className="text-zinc-300 text-xs md:text-sm leading-relaxed line-clamp-3 font-medium">
+                  Paul Atreides unites with Chani and the Fremen while on a warpath of revenge against the conspirators who destroyed his family. Experience Denis Villeneuve's masterpiece.
+                </p>
+                <div className="flex gap-3 pt-3">
+                  <button
+                    onClick={() => handleMovieClick('m_1', false)}
+                    className="px-8 py-3.5 bg-white text-black hover:bg-[#F5C518] font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase flex items-center space-x-1.5 shadow-lg shadow-white/5 cursor-pointer hover:scale-105"
+                  >
+                    <span>View Specifications</span>
+                    <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      const dune = allMovies.find(m => m.id === 'm_1');
+                      if (dune) handleQuickWatchlist(e, dune);
+                    }}
+                    className="px-8 py-3.5 bg-white/5 backdrop-blur-xl border border-white/10 text-white hover:bg-white/15 font-bold text-xs rounded-xl transition duration-300 tracking-widest uppercase cursor-pointer hover:scale-105"
+                  >
+                    + Quick Add
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* General Carousels Container */}
+            <div className="max-w-7xl mx-auto px-4 md:px-8 space-y-10">
+              
+              {/* Trending Movies */}
+              <div className="space-y-6">
+                <h3 className="text-2xl font-sans font-black tracking-tight text-white flex items-center space-x-2.5 uppercase">
+                  <Flame className="w-5.5 h-5.5 text-[#F5C518]" />
+                  <span>Trending Movies This Week</span>
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                  {allMovies.filter(m => !m.isTvShow).slice(0, 5).map(movie => (
+                    <MovieShowcaseCard
+                      key={movie.id}
+                      movie={movie}
+                      onClick={() => handleMovieClick(movie.id, false)}
+                      onQuickWatchlist={(e) => handleQuickWatchlist(e, movie)}
+                      onQuickRate={(e, score) => handleQuickRate(e, movie.id, score)}
+                      currentUserId={currentUser.id}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Trending TV Shows */}
+              <div className="space-y-6">
+                <h3 className="text-2xl font-sans font-black tracking-tight text-white flex items-center space-x-2.5 uppercase">
+                  <Flame className="w-5.5 h-5.5 text-[#F5C518]" />
+                  <span>Trending TV Shows</span>
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                  {allMovies.filter(m => m.isTvShow).slice(0, 5).map(movie => (
+                    <MovieShowcaseCard
+                      key={movie.id}
+                      movie={movie}
+                      onClick={() => handleMovieClick(movie.id, true)}
+                      onQuickWatchlist={(e) => handleQuickWatchlist(e, movie)}
+                      onQuickRate={(e, score) => handleQuickRate(e, movie.id, score)}
+                      currentUserId={currentUser.id}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Grid: Community Reviews + Friends Activity Panel */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                
+                {/* Community reviews */}
+                <div className="lg:col-span-2 space-y-6">
+                  <h3 className="text-2xl font-sans font-black tracking-tight text-white uppercase">Community Critic Logs</h3>
+                  <div className="space-y-4">
+                    {allReviews.slice(0, 3).map(rev => (
+                      <div key={rev.id} className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 hover:border-[#F5C518]/30 transition-all duration-300 shadow-md">
+                        <div className="flex justify-between">
+                          <div className="flex items-center space-x-3">
+                            <img src={rev.userAvatar} alt={rev.username} className="w-9 h-9 rounded-full object-cover cursor-pointer border border-[#F5C518]/30 hover:scale-105 transition" onClick={() => handleOpenUserOverlay(rev.username)} />
+                            <div>
+                              <span className="font-black text-xs text-white hover:text-[#F5C518] cursor-pointer block" onClick={() => handleOpenUserOverlay(rev.username)}>
+                                @{rev.username}
+                              </span>
+                              <p className="text-[10px] text-zinc-500 font-mono font-semibold uppercase">Logged notes for {rev.movieTitle}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center text-[#F5C518] text-xs font-mono font-bold bg-white/5 px-2.5 py-1 rounded-xl">
+                            <Star className="w-3.5 h-3.5 fill-current mr-1 text-[#F5C518]" />
+                            <span>{rev.rating}</span>
+                          </div>
+                        </div>
+                        <h4 className="font-black text-white text-sm">{rev.title}</h4>
+                        <p className="text-zinc-400 text-xs leading-relaxed line-clamp-3">{rev.body}</p>
+                        <button onClick={() => handleMovieClick(rev.movieId, rev.isTvShow)} className="text-[10px] text-[#F5C518] font-black uppercase tracking-wider hover:underline block cursor-pointer">
+                          Read Full Review
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Friends Activity Placeholder */}
+                <div className="space-y-6">
+                  <h3 className="text-2xl font-sans font-black tracking-tight text-white uppercase">Friends Network</h3>
+                  <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] text-center space-y-4 shadow-md">
+                    <Users className="w-8 h-8 mx-auto text-zinc-500" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-black text-white">Sync your network feed</p>
+                      <p className="text-xs text-zinc-500 leading-relaxed font-medium">
+                        Follow film lovers inside Profile settings to monitor what they watch, rate, and review.
+                      </p>
+                    </div>
+                    
+                    {/* Simulated live community recommendation profiles */}
+                    <div className="pt-3 divide-y divide-white/5 text-left text-xs">
+                      {usersList.filter(u => u.id !== currentUser.id).slice(0, 3).map(u => (
+                        <div key={u.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
+                          <div className="flex items-center space-x-2.5">
+                            <img src={u.avatarUrl} alt={u.username} className="w-7 h-7 rounded-full object-cover border border-white/5" />
+                            <span className="font-bold text-zinc-300">@{u.username}</span>
+                          </div>
+                          <button
+                            onClick={() => handleOpenUserOverlay(u.username)}
+                            className="text-[10px] text-[#F5C518] font-black uppercase tracking-wider hover:underline cursor-pointer"
+                          >
+                            View Bio
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* 2. EXPLORE TAB VIEW (Bento Layout) */}
+        {activeTab === 'explore' && (
+          <div className="max-w-7xl mx-auto px-4 md:px-8 pt-20 md:pt-28 space-y-10 animate-fadeIn">
+            
+            {/* Title */}
+            <div>
+              <h1 className="text-3xl font-sans font-black tracking-tight text-white">Explore Cinematic Space</h1>
+              <p className="text-zinc-400 text-xs md:text-sm font-medium">Filter genres, read system bulletins, and find your next visual masterpiece.</p>
+            </div>
+
+            {/* Bento Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              
+              {/* Box 1: Genres Spotlights */}
+              <div className="md:col-span-2 bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
+                <h3 className="font-black text-sm uppercase tracking-wider text-[#F5C518] flex items-center space-x-2">
+                  <Compass className="w-5 h-5" />
+                  <span>Cinematic Genre Directories</span>
+                </h3>
+                <p className="text-xs text-zinc-400 font-medium">Click any genre to auto-filter specifications in search panels.</p>
+                
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {['Action', 'Sci-Fi', 'Drama', 'Comedy', 'Thriller', 'Animation', 'Mystery', 'Romance', 'Horror'].map((genre) => (
+                    <div
+                      key={genre}
+                      onClick={() => {
+                        setSearchGenre(genre);
+                        setActiveTab('search');
+                      }}
+                      className="p-4 bg-[#1A1A1A] border border-white/5 rounded-2xl hover:border-[#F5C518]/30 hover:bg-[#1A1A1A]/70 cursor-pointer transition-all duration-300"
+                    >
+                      <h4 className="font-bold text-sm text-white">{genre}</h4>
+                      <p className="text-[10px] text-zinc-500 font-mono mt-1 font-bold uppercase">Explore Film list</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Box 2: Real Bulletins / Announcements */}
+              <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
+                <h3 className="font-black text-sm uppercase tracking-wider text-[#F5C518] flex items-center space-x-2">
+                  <Bell className="w-4.5 h-4.5" />
+                  <span>System Bulletins</span>
+                </h3>
+
+                <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
+                  {announcements.map(ann => (
+                    <div key={ann.id} className="bg-[#1A1A1A] p-4 rounded-2xl border border-white/5 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="px-2.5 py-1 bg-[#F5C518] text-black text-[8px] font-black rounded-full font-mono uppercase tracking-wider">
+                          {ann.badge || 'BULLETIN'}
+                        </span>
+                        <span className="text-[9px] text-zinc-500 font-mono font-bold">{ann.createdAt}</span>
+                      </div>
+                      <h4 className="font-black text-white text-xs">{ann.title}</h4>
+                      <p className="text-[11px] text-zinc-400 leading-relaxed font-medium">{ann.content}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Box 3: Streaming Platform quick filters */}
+              <div className="md:col-span-3 bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] space-y-4 shadow-xl">
+                <h3 className="font-black text-sm uppercase tracking-wider text-white">Filter by Streaming Provider</h3>
+                <div className="flex flex-wrap gap-3">
+                  {['Netflix', 'Prime Video', 'Disney+', 'Apple TV+', 'Max'].map(platform => (
+                    <div
+                      key={platform}
+                      onClick={() => {
+                        setSearchPlatform(platform);
+                        setActiveTab('search');
+                      }}
+                      className="bg-[#1A1A1A] p-4 border border-white/5 rounded-2xl cursor-pointer hover:border-[#F5C518]/30 hover:bg-[#1A1A1A]/70 transition-all duration-300 flex items-center space-x-3.5 grow shrink-0 min-w-[160px]"
+                    >
+                      <div className="w-9 h-9 rounded-full bg-[#F5C518]/10 flex items-center justify-center font-black text-[#F5C518] font-mono text-sm shadow-inner">
+                        {platform[0]}
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-xs text-white">{platform}</h4>
+                        <p className="text-[9px] text-zinc-500 font-mono font-bold uppercase">Filter lists</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* 3. SEARCH TAB VIEW */}
+        {activeTab === 'search' && (
+          <div className="max-w-7xl mx-auto px-4 md:px-8 pt-20 md:pt-28 space-y-8 animate-fadeIn">
+            
+            {/* Header / query Input */}
+            <div className="space-y-4">
+              <h1 className="text-3xl font-sans font-black tracking-tight text-white uppercase">Registry Search</h1>
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Query movies, TV shows, cast, directors..."
+                  className="w-full bg-[#111111]/90 border border-white/5 rounded-2xl pl-12 pr-4 py-4 text-white focus:border-[#F5C518] outline-none shadow-xl transition-all duration-300"
+                />
+              </div>
+            </div>
+
+            {/* Filter Hub specification block */}
+            <div className="bg-[#111111]/90 border border-white/5 p-6 rounded-[2rem] grid grid-cols-2 md:grid-cols-5 gap-4 text-xs text-zinc-400 shadow-xl">
+              
+              {/* Genres filter */}
+              <div className="space-y-2">
+                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Genre Spec</label>
+                <select
+                  value={searchGenre}
+                  onChange={e => setSearchGenre(e.target.value)}
+                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
+                >
+                  <option value="">All Genres</option>
+                  {['Action', 'Sci-Fi', 'Drama', 'Comedy', 'Thriller', 'Animation', 'Mystery', 'Romance', 'Horror'].map(g => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Release Year filter */}
+              <div className="space-y-2">
+                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Release Year</label>
+                <select
+                  value={searchYear}
+                  onChange={e => setSearchYear(e.target.value)}
+                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
+                >
+                  <option value="">All Years</option>
+                  {['2026', '2025', '2024', '2023', '2022', '2018', '2014'].map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Language filter */}
+              <div className="space-y-2">
+                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Language</label>
+                <select
+                  value={searchLanguage}
+                  onChange={e => setSearchLanguage(e.target.value)}
+                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
+                >
+                  <option value="">All Languages</option>
+                  <option value="EN">English</option>
+                  <option value="ES">Spanish</option>
+                  <option value="FR">French</option>
+                  <option value="JA">Japanese</option>
+                </select>
+              </div>
+
+              {/* Streaming provider */}
+              <div className="space-y-2">
+                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Platform Provider</label>
+                <select
+                  value={searchPlatform}
+                  onChange={e => setSearchPlatform(e.target.value)}
+                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
+                >
+                  <option value="">All Platforms</option>
+                  <option value="Netflix">Netflix</option>
+                  <option value="Prime Video">Prime Video</option>
+                  <option value="Disney+">Disney+</option>
+                  <option value="Apple TV+">Apple TV+</option>
+                  <option value="Max">Max</option>
+                </select>
+              </div>
+
+              {/* Sorter */}
+              <div className="space-y-2">
+                <label className="font-black uppercase tracking-widest font-mono block text-zinc-500 text-[10px]">Sort Index</label>
+                <select
+                  value={searchSort}
+                  onChange={e => setSearchSort(e.target.value)}
+                  className="w-full bg-[#1A1A1A] border border-white/5 rounded-xl p-3 text-white outline-none cursor-pointer hover:border-[#F5C518]/30 transition"
+                >
+                  <option value="popularity">Popularity</option>
+                  <option value="rating">Average Rating</option>
+                  <option value="newest">Newest Releases</option>
+                  <option value="oldest">Oldest Catalog</option>
+                </select>
+              </div>
+
+            </div>
+
+            {/* Clear specification filter button */}
+            {(searchGenre || searchYear || searchLanguage || searchPlatform) && (
+              <button
+                onClick={() => {
+                  setSearchGenre('');
+                  setSearchYear('');
+                  setSearchLanguage('');
+                  setSearchPlatform('');
+                  setSearchQuery('');
+                }}
+                className="px-6 py-3 bg-[#111111]/90 border border-white/5 hover:border-[#F5C518] hover:text-[#F5C518] text-white rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition duration-300 cursor-pointer"
+              >
+                Clear Specification Filters
+              </button>
+            )}
+
+            {/* Results Grid */}
+            {filteredSearchMovies.length === 0 ? (
+              <div className="text-center py-16 text-zinc-500 italic font-medium">
+                No matching catalog entries found. Double check search queries or expand filters.
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                {filteredSearchMovies.map(movie => (
+                  <MovieShowcaseCard
+                    key={movie.id}
+                    movie={movie}
+                    onClick={() => handleMovieClick(movie.id, !!movie.isTvShow)}
+                    onQuickWatchlist={(e) => handleQuickWatchlist(e, movie)}
+                    onQuickRate={(e, score) => handleQuickRate(e, movie.id, score)}
+                    currentUserId={currentUser.id}
+                  />
+                ))}
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* 4. WATCHLIST TAB VIEW */}
+        {activeTab === 'watchlist' && (
+          <div className="max-w-7xl mx-auto px-4 md:px-8 pt-20 md:pt-28 space-y-8 animate-fadeIn">
+            
+            {/* Header */}
+            <div>
+              <h1 className="text-3xl font-sans font-black tracking-tight text-white uppercase">Your Film Watchlists</h1>
+              <p className="text-zinc-400 text-xs md:text-sm font-medium">Manage planning lists, active programs, completed movies, and favorite titles.</p>
+            </div>
+
+            {/* Query filter / status tabs */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+              
+              {/* Watch status filter Tabs */}
+              <div className="md:col-span-2 flex border-b border-white/5 space-x-6">
+                {(['Plan to Watch', 'Watching', 'Completed', 'Favorites'] as WatchlistStatus[]).map(status => (
+                  <button
+                    key={status}
+                    onClick={() => setWatchlistFilter(status)}
+                    className={`pb-3.5 text-xs md:text-sm font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
+                      watchlistFilter === status
+                        ? 'text-[#F5C518] border-b-2 border-[#F5C518] font-black'
+                        : 'text-zinc-500 hover:text-white'
+                    }`}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+
+              {/* Query filter inside watchlist */}
+              <input
+                type="text"
+                value={watchlistQuery}
+                onChange={e => setWatchlistQuery(e.target.value)}
+                placeholder="Search inside current list..."
+                className="bg-[#111111]/90 border border-white/5 rounded-2xl px-4 py-3 text-xs text-white outline-none focus:border-[#F5C518] shadow-md transition-all duration-300"
+              />
+
+            </div>
+
+            {/* Grid of Watchlist Items */}
+            {myWatchlistItems.length === 0 ? (
+              <div className="text-center py-20 border border-dashed border-white/5 rounded-[2rem] text-zinc-500 italic text-sm bg-[#111111]/40">
+                No films under "{watchlistFilter}" watchlist currently. Explore titles to add items!
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                {myWatchlistItems.map(item => {
+                  const actualMovie = allMovies.find(m => m.id === item.movieId);
+                  if (!actualMovie) return null;
+                  return (
+                    <MovieShowcaseCard
+                      key={item.movieId}
+                      movie={actualMovie}
+                      onClick={() => handleMovieClick(item.movieId, item.isTvShow)}
+                      onQuickWatchlist={(e) => handleQuickWatchlist(e, actualMovie)}
+                      onQuickRate={(e, score) => handleQuickRate(e, item.movieId, score)}
+                      currentUserId={currentUser.id}
+                    />
+                  );
+                })}
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* 5. USER PROFILE & SETTINGS TAB VIEW */}
+        {activeTab === 'profile' && (
+          <ProfileTab
+            onLogout={handleLogout}
+            onMovieClick={handleMovieClick}
+            allMovies={allMovies}
+          />
+        )}
+
+        {/* 6. ADMIN CONTROL VIEW */}
+        {activeTab === 'admin' && (
+          <AdminPanel
+            onMovieClick={handleMovieClick}
+            usersList={usersList}
+            onUpdateUsersList={handleUpdateUsersList}
+          />
+        )}
+
+      </main>
+
+      {/* MODAL: MOVIE DETAILS OVERLAY */}
+      {selectedMovieId && (
+        <MovieDetails
+          movieId={selectedMovieId}
+          isTv={selectedMovieIsTv}
+          userId={currentUser.id}
+          onClose={() => {
+            setSelectedMovieId(null);
+            loadAllMedia();
+          }}
+          onMovieClick={handleMovieClick}
+          allMovies={allMovies}
+        />
+      )}
+
+      {/* MODAL: NOTIFICATIONS CENTER TOP DROPDOWN */}
+      {showNotifications && (
+        <div 
+          onClick={() => {
+            setShowNotifications(false);
+            loadAllMedia();
+          }}
+          className="fixed inset-0 bg-black/50 z-50 flex justify-center items-start pt-24 px-4 backdrop-blur-sm"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#111111]/95 backdrop-blur-2xl border border-white/10 w-full max-w-lg rounded-[2rem] p-6 space-y-4 shadow-2xl animate-fadeIn flex flex-col max-h-[75vh]"
+          >
+            
+            <div className="flex justify-between items-center border-b border-white/5 pb-3 shrink-0">
+              <div className="flex items-center space-x-2.5">
+                <Bell className="w-5 h-5 text-[#F5C518] animate-pulse" />
+                <h2 className="text-md font-sans font-black tracking-tight text-white uppercase">Notification Center</h2>
+              </div>
+              <button
+                onClick={() => {
+                  setShowNotifications(false);
+                  loadAllMedia();
+                }}
+                className="p-1.5 hover:text-[#F5C518] hover:bg-white/5 rounded-full transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 max-h-[50vh]">
+              {getNotifications(currentUser.id).length === 0 ? (
+                <div className="text-center py-12 text-zinc-500 italic text-xs font-medium">
+                  No notifications recorded. Log review comments, follow users, or like reviews to see updates!
+                </div>
+              ) : (
+                getNotifications(currentUser.id).map(notif => (
+                  <div
+                    key={notif.id}
+                    onClick={() => {
+                      if (notif.targetId) {
+                        handleMovieClick(notif.targetId, false);
+                      }
+                      setShowNotifications(false);
+                    }}
+                    className="flex space-x-3.5 bg-[#1A1A1A] p-3.5 border border-white/5 rounded-2xl hover:border-[#F5C518]/30 cursor-pointer transition-all text-xs leading-normal shadow-md"
+                  >
+                    <img src={notif.senderAvatar} alt={notif.senderName} className="w-8 h-8 rounded-full object-cover shrink-0 border border-white/5" />
+                    <div>
+                      <p className="text-zinc-300">
+                        <span className="font-bold text-white">@{notif.senderName}</span> {notif.content}
+                      </p>
+                      <p className="text-[9px] text-zinc-500 font-mono font-semibold uppercase mt-1">
+                        {new Date(notif.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: OTHER MEMBER COMMUNITY PROFILE OVERLAY */}
+      {selectedUserOverlay && (
+        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-[#111111] border border-white/5 rounded-[2.5rem] max-w-lg w-full overflow-hidden shadow-2xl animate-fadeIn">
+            {/* Banner block */}
+            <div className="relative h-32">
+              <img src={selectedUserOverlay.bannerUrl} alt="Banner" className="w-full h-full object-cover opacity-30" />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#111111] to-transparent" />
+              <button onClick={() => setSelectedUserOverlay(null)} className="absolute top-5 right-5 text-white hover:text-[#F5C518] transition cursor-pointer bg-black/50 p-2 rounded-full backdrop-blur-md">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Profile specifications */}
+            <div className="px-8 pb-8 relative -mt-10 space-y-5">
+              <div className="flex items-end justify-between">
+                <img src={selectedUserOverlay.avatarUrl} alt={selectedUserOverlay.displayName} className="w-22 h-22 rounded-full border-4 border-[#111111] object-cover shadow-xl" />
+                
+                {/* Follow trigger */}
+                {selectedUserOverlay.id !== currentUser.id && (
+                  <button
+                    onClick={() => handleToggleFollowUser(selectedUserOverlay)}
+                    className={`px-5 py-2 rounded-full font-black text-xs uppercase tracking-wider flex items-center space-x-1.5 transition cursor-pointer ${
+                      isFollowing(currentUser.id, selectedUserOverlay.id)
+                        ? 'bg-[#1A1A1A] border border-white/10 text-white'
+                        : 'bg-[#F5C518] text-black hover:bg-[#F5C518]/90 shadow-lg shadow-[#F5C518]/15 hover:scale-105'
+                    }`}
+                  >
+                    {isFollowing(currentUser.id, selectedUserOverlay.id) ? (
+                      <>
+                        <UserCheck className="w-3.5 h-3.5" />
+                        <span>Following</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>Follow user</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <h3 className="text-2xl font-sans font-black tracking-tight text-white">{selectedUserOverlay.displayName}</h3>
+                <p className="text-xs text-zinc-500 font-mono font-bold">@{selectedUserOverlay.username}</p>
+              </div>
+
+              <p className="text-xs text-zinc-300 leading-relaxed bg-[#1A1A1A] p-4 rounded-2xl border border-white/5 font-medium">
+                {selectedUserOverlay.bio || 'This cinephile hasn\'t set up a bio profile yet.'}
+              </p>
+
+              {/* Stats and genres */}
+              <div className="flex justify-between items-center bg-[#1A1A1A] border border-white/5 p-4 rounded-2xl text-center text-xs font-mono">
+                <div>
+                  <p className="font-black text-white text-base">{selectedUserOverlay.followersCount}</p>
+                  <p className="text-[10px] text-zinc-500 uppercase font-sans font-bold tracking-wider">Followers</p>
+                </div>
+                <div className="h-8 w-[1px] bg-white/10" />
+                <div>
+                  <p className="font-black text-white text-base">{selectedUserOverlay.followingCount}</p>
+                  <p className="text-[10px] text-zinc-500 uppercase font-sans font-bold tracking-wider">Following</p>
+                </div>
+                <div className="h-8 w-[1px] bg-white/10" />
+                <div>
+                  <p className="font-black text-white text-base">
+                    {getReviews().filter(r => r.userId === selectedUserOverlay.id).length}
+                  </p>
+                  <p className="text-[10px] text-zinc-500 uppercase font-sans font-bold tracking-wider">Reviews</p>
+                </div>
+              </div>
+
+              {selectedUserOverlay.favoriteGenres.length > 0 && (
+                <div className="space-y-1.5">
+                  <h4 className="text-[10px] text-gray-500 uppercase font-bold font-mono">Prefers</h4>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedUserOverlay.favoriteGenres.map(g => (
+                      <span key={g} className="px-2 py-0.5 bg-zinc-950 text-[10px] border border-white/5 rounded text-gray-400">
+                        {g}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// Reusable showcase movie card sub-component
+interface MovieShowcaseCardProps {
+  key?: string | number;
+  movie: Movie;
+  onClick: () => void;
+  onQuickWatchlist: (e: React.MouseEvent) => void;
+  onQuickRate: (e: React.MouseEvent, score: number) => void;
+  currentUserId: string;
+}
+
+function MovieShowcaseCard({
+  movie,
+  onClick,
+  onQuickWatchlist,
+  onQuickRate,
+  currentUserId
+}: MovieShowcaseCardProps) {
+  const isCurrentlyInWatchlist = getWatchlist(currentUserId).some(w => w.movieId === movie.id);
+  const existingRating = getUserRating(currentUserId, movie.id);
+
+  return (
+    <div
+      onClick={onClick}
+      className="group cursor-pointer bg-[#111111]/90 border border-white/5 rounded-[2rem] overflow-hidden hover:border-[#F5C518]/30 hover:bg-[#1A1A1A] transition-all duration-500 relative flex flex-col shadow-[0_4px_20px_rgba(0,0,0,0.4)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.7)]"
+    >
+      {/* Poster wrapper */}
+      <div className="aspect-[2/3] w-full overflow-hidden relative border-b border-white/5 rounded-t-[2rem]">
+        <img
+          src={movie.posterUrl}
+          alt={movie.title}
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
+          referrerPolicy="no-referrer"
+        />
+
+        {/* Floating average rating badge */}
+        <div className="absolute top-3 right-3 bg-black/80 backdrop-blur-md border border-white/10 px-2.5 py-1 rounded-xl text-[10px] font-mono text-[#F5C518] font-black flex items-center shadow-lg">
+          <Star className="w-3.5 h-3.5 fill-current mr-1 text-[#F5C518]" />
+          {movie.communityRating}
+        </div>
+
+        {/* Quick Watchlist Bookmark button */}
+        <button
+          onClick={onQuickWatchlist}
+          className={`absolute top-3 left-3 p-2.5 rounded-full transition-all duration-300 border backdrop-blur-md shadow-lg cursor-pointer ${
+            isCurrentlyInWatchlist
+              ? 'bg-[#F5C518] text-black border-[#F5C518] scale-105'
+              : 'bg-black/80 text-white border-white/10 hover:bg-[#F5C518] hover:text-black hover:border-[#F5C518] hover:scale-105'
+          }`}
+          title={isCurrentlyInWatchlist ? 'Remove from Watchlist' : 'Plan to Watch'}
+        >
+          <Bookmark className="w-3.5 h-3.5 fill-current" />
+        </button>
+
+        {/* Hover Rate Slide Widget Overlay */}
+        <div className="absolute inset-x-0 bottom-0 bg-[#090909]/95 backdrop-blur-md p-4 text-[10px] translate-y-full group-hover:translate-y-0 transition-all duration-300 ease-out flex flex-col justify-center space-y-2 border-t border-white/5">
+          <p className="text-zinc-400 text-center uppercase font-mono font-bold tracking-widest text-[9px]">Quick Rating</p>
+          <div className="flex justify-between items-center space-x-1 pt-1">
+            {[1, 2, 3, 4, 5].map(score => (
+              <button
+                key={score}
+                onClick={(e) => onQuickRate(e, score)}
+                className={`flex-1 py-1.5 rounded-lg text-center transition font-black cursor-pointer text-[11px] ${
+                  existingRating === score
+                    ? 'bg-[#F5C518] text-black shadow-md shadow-[#F5C518]/20'
+                    : 'bg-zinc-900 text-zinc-400 hover:bg-[#F5C518]/20 hover:text-[#F5C518]'
+                }`}
+              >
+                {score}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Info contents */}
+      <div className="p-4.5 flex-1 flex flex-col justify-between min-w-0">
+        <div className="space-y-1 min-w-0">
+          <h4 className="font-sans font-black text-sm text-white truncate group-hover:text-[#F5C518] transition-colors duration-300 tracking-tight">
+            {movie.title}
+          </h4>
+          <div className="flex items-center space-x-1.5 text-[10px] text-zinc-500 font-mono font-bold">
+            <span>{movie.releaseDate.split('-')[0]}</span>
+            <span>•</span>
+            <span className="text-zinc-400 font-sans tracking-wider uppercase text-[9px] font-semibold">{movie.isTvShow ? 'TV Series' : 'Feature Film'}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

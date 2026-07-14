@@ -1,0 +1,170 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents a user profile in the Rovix platform.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique user ID matching Firebase Auth UID." },
+        "email": { "type": "string", "format": "email", "description": "User email address." },
+        "username": { "type": "string", "maxLength": 50, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Unique username." },
+        "displayName": { "type": "string", "maxLength": 100, "description": "Display name of the user." },
+        "avatarUrl": { "type": "string", "description": "URL to the user avatar image." },
+        "bannerUrl": { "type": "string", "description": "URL to the user profile banner image." },
+        "bio": { "type": "string", "maxLength": 500, "description": "Short bio description." },
+        "favoriteGenres": { "type": "array", "description": "Array of favorite genre names." },
+        "joinedDate": { "type": "string", "format": "date", "description": "Date user joined." },
+        "followersCount": { "type": "integer", "description": "Total followers." },
+        "followingCount": { "type": "integer", "description": "Total users followed." },
+        "isAdmin": { "type": "boolean", "description": "Admin status flag." }
+      },
+      "required": ["id", "email", "username", "displayName"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Represents a user-authored movie or TV show review.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "movieId": { "type": "string" },
+        "movieTitle": { "type": "string" },
+        "moviePoster": { "type": "string" },
+        "isTvShow": { "type": "boolean" },
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "userAvatar": { "type": "string" },
+        "title": { "type": "string", "maxLength": 150 },
+        "body": { "type": "string", "maxLength": 5000 },
+        "rating": { "type": "number" },
+        "isSpoiler": { "type": "boolean" },
+        "likes": { "type": "integer" },
+        "likedBy": { "type": "array" },
+        "replies": { "type": "array" },
+        "isReported": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "movieId", "movieTitle", "userId", "username", "title", "body"]
+    },
+    "Rating": {
+      "title": "Rating",
+      "description": "User ratings for movies and TV shows.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "movieId": { "type": "string" },
+        "rating": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "movieId", "rating"]
+    },
+    "WatchlistItem": {
+      "title": "WatchlistItem",
+      "description": "An item inside a user's watchlist.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "movieId": { "type": "string" },
+        "movieTitle": { "type": "string" },
+        "moviePoster": { "type": "string" },
+        "isTvShow": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["Watching", "Completed", "Plan to Watch", "Dropped"] },
+        "addedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "movieId", "movieTitle", "status"]
+    },
+    "Follow": {
+      "title": "Follow",
+      "description": "Follow relationship between two users.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "followerId": { "type": "string" },
+        "followingId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "followerId", "followingId"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "A notification for a user activity or system update.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["follow", "like", "reply", "release", "news"] },
+        "senderName": { "type": "string" },
+        "senderAvatar": { "type": "string" },
+        "content": { "type": "string", "maxLength": 500 },
+        "targetId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "isRead": { "type": "boolean" }
+      },
+      "required": ["id", "userId", "type", "content", "createdAt"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "A system-wide broadcast bulletin announcement.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string", "maxLength": 2000 },
+        "badge": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "content", "createdAt"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Reports flagged by users for review moderation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reporterId": { "type": "string" },
+        "reporterUsername": { "type": "string" },
+        "targetId": { "type": "string" },
+        "targetType": { "type": "string", "enum": ["review"] },
+        "reason": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "resolved": { "type": "boolean" }
+      },
+      "required": ["id", "reporterId", "targetId", "reason", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Individual user profiles."
+    },
+    "reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Platform critiques and reviews."
+    },
+    "ratings/{ratingId}": {
+      "schema": "Rating",
+      "description": "User ratings record."
+    },
+    "watchlist/{watchlistId}": {
+      "schema": "WatchlistItem",
+      "description": "Watchlists matching users with tracked movies."
+    },
+    "follows/{followId}": {
+      "schema": "Follow",
+      "description": "Users relationship graph mapping follows."
+    },
+    "notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "In-app notifications."
+    },
+    "announcements/{announcementId}": {
+      "schema": "Announcement",
+      "description": "Global system announcements."
+    },
+    "reports/{reportId}": {
+      "schema": "Report",
+      "description": "Moderator reports logs."
+    }
+  }
+}
